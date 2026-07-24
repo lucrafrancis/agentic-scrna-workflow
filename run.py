@@ -11,15 +11,15 @@ from pathlib import Path
 
 from agent import config
 from agent.loop import run_agent
+from agent.session import SESSION
 
 
 def main(h5ad_path: str) -> None:
     config.set_global_seed()
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # TODO: load the AnnData and make it available to the tools (session state).
-    #       Decide the sharing mechanism (module-level session object vs. explicit passing)
-    #       when we implement the first real tool.
+    # Load the dataset into the shared session; tools reach it via SESSION (see session.py).
+    SESSION.load(h5ad_path)
 
     prompt = (
         f"Analyze the single-cell dataset at {h5ad_path}. "

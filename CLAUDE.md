@@ -27,6 +27,19 @@ clarity and transparency of the agentic mechanism over feature completeness.
   3. the **runtime system prompt** (`agent/prompts.py`) — the instructions given to the
      *running* agent.
 
+### State-sharing & checkpointing
+
+- **Shared state via a `Session` object** (`agent/session.py`), not by passing `adata`
+  through tool arguments. Rationale: the LLM only ever sees JSON summaries, so it must
+  never receive the matrix. Tools take *decisions* (e.g. `min_genes`) and reach the working
+  `AnnData` through the module-level `SESSION`. Keeps the LLM-facing schemas clean.
+- **Checkpoint after each mutating step**: the ~5 mutating tools (filter, doublets,
+  normalize, DR, cluster, annotate) call `SESSION.checkpoint(label)`, writing a numbered
+  `outputs/checkpoints/NN_label.h5ad` and returning the path in their summary. Non-mutating
+  tools do not checkpoint. Rationale: recovery (skip re-running scVI) + an *effects* audit
+  trail that pairs with the *decisions* trail in `tool_calls.jsonl`. The final checkpoint is
+  the annotated-`.h5ad` deliverable.
+
 ### CLAUDE.md vs. the runtime system prompt
 
 Do not conflate them. **This file (`CLAUDE.md`)** steers Claude Code while *building* the

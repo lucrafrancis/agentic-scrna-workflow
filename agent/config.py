@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "outputs"
 FIGURE_DIR = OUTPUT_DIR / "figures"
+CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
 REPORT_PATH = OUTPUT_DIR / "report.md"
 TOOL_LOG_PATH = OUTPUT_DIR / "tool_calls.jsonl"
 
