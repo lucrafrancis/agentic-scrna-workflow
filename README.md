@@ -7,7 +7,7 @@ and writes up the results at the end. There's no fixed script; the model chooses
 The point was to see whether an LLM could act like an analysis assistant that actually makes
 sensible decisions, rather than just wrapping a chatbot around a pipeline.
 
-![UMAP of the annotated PBMC3k result](examples/pbmc3k/umap.png)
+![UMAP of the annotated PBMC3k result](examples/pbmc3k/figures/umap.png)
 
 *Result on the PBMC3k dataset: clusters annotated with their cell types. The full write-up the
 agent produced is in [`examples/pbmc3k/report.md`](examples/pbmc3k/report.md).*
@@ -30,7 +30,7 @@ On a dataset made of two separate 10x runs, the agent chose scVI and integrated 
 the result by batch shows the two runs mixed together within each cell type, which is what you
 want to see when integration works:
 
-![UMAP coloured by cell type, cluster, and batch](examples/pbmc_multibatch/umap.png)
+![UMAP coloured by cell type, cluster, and batch](examples/pbmc_multibatch/figures/umap.png)
 
 Full report: [`examples/pbmc_multibatch/report.md`](examples/pbmc_multibatch/report.md).
 
