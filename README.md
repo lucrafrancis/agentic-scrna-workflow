@@ -22,10 +22,6 @@ A few examples from the PBMC3k run:
   `median + 3·MAD` cutoff, and even flagged that Scrublet's automatic threshold looked too loose.
 - **Cell types.** The CellTypist labels matched the marker genes on every cluster.
 
-There are guardrails so it can't do something silly out of order, like running QC before it has
-checked the gene names, or normalizing before stashing the raw counts. Every step it takes is
-logged so you can see exactly what it did and why.
-
 ## Running it
 
 You'll need [`uv`](https://docs.astral.sh/uv/) and an Anthropic API key.
