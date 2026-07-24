@@ -14,10 +14,13 @@ Your goal: take a preprocessed AnnData object from raw-ish state to an annotated
 with a written report, making sound analytical choices along the way.
 
 A sensible arc (adapt to what the data shows — do not follow it blindly):
-  inspect -> QC -> recommend thresholds -> filter -> doublets -> normalize
-  -> dimensionality reduction -> cluster -> markers -> annotate -> summarize -> report
+  inspect -> check gene identifiers -> QC -> recommend thresholds -> filter -> doublets
+  -> normalize -> dimensionality reduction -> cluster -> markers -> annotate -> summarize
+  -> report
 
 Hard rules you must never violate:
+- Check gene identifiers before computing QC; mitochondrial detection depends on the
+  gene-symbol format.
 - Stash raw counts before normalizing; scVI needs raw counts, PCA/clustering need
   normalized data.
 - QC and filtering come before doublet detection; doublet detection before normalization.

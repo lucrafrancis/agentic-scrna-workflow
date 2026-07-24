@@ -85,19 +85,20 @@ agentic-scrna-workflow/
 Each tool returns a structured summary dict. The agent decides order and arguments.
 
 1. Inspect dataset (n cells/genes, organism, obs/var columns, batch key if any)
-2. Compute QC metrics
-3. Recommend QC filtering thresholds
-4. Filter low-quality cells and genes
-5. Detect doublets (scrublet)
-6. Normalize & preprocess (log-normalize; HVGs; **stash raw counts first**)
-7. Dimensionality reduction — **two sibling tools, the agent chooses:**
+2. Check gene identifiers (symbol/ensembl format, organism, mito prefix; run before QC)
+3. Compute QC metrics
+4. Recommend QC filtering thresholds
+5. Filter low-quality cells and genes
+6. Detect doublets (scrublet)
+7. Normalize & preprocess (log-normalize; HVGs; **stash raw counts first**)
+8. Dimensionality reduction — **two sibling tools, the agent chooses:**
    - `run_pca` — standard, correct for a single clean batch
    - `run_scvi` — VAE latent with batch correction; reads raw counts
-8. Cluster cells (neighbors + Leiden on the chosen representation)
-9. Identify marker genes
-10. Annotate cell types (CellTypist)
-11. Summarize biological findings
-12. Generate a Markdown analysis report
+9. Cluster cells (neighbors + Leiden on the chosen representation)
+10. Identify marker genes
+11. Annotate cell types (CellTypist)
+12. Summarize biological findings
+13. Generate a Markdown analysis report
 
 ## Conventions / guardrails
 
@@ -108,6 +109,9 @@ Biological invariants the agent (and tools) must respect regardless of tool orde
   normalized matrix.
 - **Never run PCA/clustering on raw counts**, and **never run scVI on log-normalized
   data.** Tools validate the state they expect and error loudly otherwise.
+- **Check gene identifiers before QC:** mito detection is symbol-format dependent. If
+  symbols are unavailable (Ensembl-only), flag and proceed with degraded mito detection —
+  do not build a symbol mapping (decided scope: Option A).
 - **QC and filtering before doublet detection**, doublet detection before normalization.
 - **Dimensionality-reduction decision rule** (encode in the system prompt): if `obs` has a
   batch key with >1 batch, prefer `run_scvi` for its correction; for a single clean batch

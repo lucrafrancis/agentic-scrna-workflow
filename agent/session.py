@@ -18,6 +18,9 @@ class Session:
         self.adata: ad.AnnData | None = None
         # Set by the dimensionality-reduction tool; read by clustering. e.g. "X_pca" / "X_scVI".
         self.representation: str | None = None
+        # Set by check_gene_identifiers; read by compute_qc.
+        self.gene_format: str | None = None  # "symbol" | "ensembl" | "other"
+        self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
         self._step = 0
 
     def load(self, path) -> ad.AnnData:
