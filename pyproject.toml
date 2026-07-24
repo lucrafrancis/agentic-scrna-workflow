@@ -3,6 +3,8 @@ name = "agentic-scrna-workflow"
 version = "0.1.0"
 description = "An agentic LLM workflow that autonomously drives a single-cell RNA-seq analysis."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40",
