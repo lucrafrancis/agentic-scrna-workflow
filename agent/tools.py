@@ -49,6 +49,14 @@ def _looks_like_counts(X) -> bool:
     return bool(np.all(data >= 0) and np.allclose(data, np.round(data)))
 
 
+def _detect_batch_key(adata) -> str | None:
+    """First obs column matching a batch hint with more than one value, else None."""
+    for col in adata.obs.columns:
+        if col.lower() in _BATCH_HINTS and adata.obs[col].nunique() > 1:
+            return col
+    return None
+
+
 def inspect_dataset() -> Summary:
     """n cells/genes, obs/var columns, candidate batch key, and count/layer state.
 
@@ -58,12 +66,8 @@ def inspect_dataset() -> Summary:
     adata = SESSION.require_adata()
     obs_cols = list(adata.obs.columns)
 
-    candidate_batch_key, n_batches = None, None
-    for col in obs_cols:
-        if col.lower() in _BATCH_HINTS and adata.obs[col].nunique() > 1:
-            candidate_batch_key = col
-            n_batches = int(adata.obs[col].nunique())
-            break
+    candidate_batch_key = _detect_batch_key(adata)
+    n_batches = int(adata.obs[candidate_batch_key].nunique()) if candidate_batch_key else None
 
     return {
         "n_cells": int(adata.n_obs),
@@ -530,6 +534,11 @@ def generate_report(report_markdown: str) -> Summary:
 
     if "X_umap" in adata.obsm:
         colors = [c for c in ("cell_type", "leiden") if c in adata.obs]
+        # For multi-batch data, colouring by batch shows whether integration (scVI) mixed the
+        # batches (good) or left them as separate islands (not integrated).
+        batch_key = _detect_batch_key(adata)
+        if batch_key:
+            colors.append(batch_key)
         sc.pl.umap(adata, color=colors, show=False, wspace=0.4)
         path = paths.figures / "umap.png"
         plt.savefig(path, dpi=120, bbox_inches="tight")

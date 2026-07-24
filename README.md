@@ -16,11 +16,23 @@ agent produced is in [`examples/pbmc3k/report.md`](examples/pbmc3k/report.md).*
 
 A few examples from the PBMC3k run:
 
-- **PCA vs. scVI.** It noticed there was no batch information, so it picked PCA (scVI is only
-  worth it when you need to correct for batches).
+- **PCA vs. scVI.** On PBMC3k it saw there was no batch information and picked PCA. On a second
+  dataset with two batches it picked scVI instead, to correct for them.
 - **Doublet cutoff.** The score distribution wasn't cleanly split in two, so it used a
   `median + 3·MAD` cutoff, and even flagged that Scrublet's automatic threshold looked too loose.
-- **Cell types.** The CellTypist labels matched the marker genes on every cluster.
+- **Adjusting to the data.** On the two-batch set, the usual 5% mitochondrial cutoff would have
+  thrown away 82% of the cells (their baseline mito was just higher), so it loosened the cutoff
+  to 15% instead of blindly applying the default.
+
+## A run with batches
+
+On a dataset made of two separate 10x runs, the agent chose scVI and integrated them. Colouring
+the result by batch shows the two runs mixed together within each cell type, which is what you
+want to see when integration works:
+
+![UMAP coloured by cell type, cluster, and batch](examples/pbmc_multibatch/umap.png)
+
+Full report: [`examples/pbmc_multibatch/report.md`](examples/pbmc_multibatch/report.md).
 
 ## Running it
 
@@ -33,6 +45,13 @@ echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshenv && source ~/.zshenv
 
 uv run python scripts/fetch_pbmc3k.py        # download the example data
 uv run python run.py data/pbmc3k.h5ad        # run the agent
+```
+
+For the two-batch example instead:
+
+```bash
+uv run python scripts/fetch_pbmc_multibatch.py
+uv run python run.py data/pbmc_multibatch.h5ad
 ```
 
 As it runs you'll see its reasoning and the tools it calls. Results go to `outputs/`: the
