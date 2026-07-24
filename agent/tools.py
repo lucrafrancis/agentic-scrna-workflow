@@ -49,6 +49,10 @@ def _looks_like_counts(X) -> bool:
     return bool(np.all(data >= 0) and np.allclose(data, np.round(data)))
 
 
+def _as_float(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def _detect_batch_key(adata) -> str | None:
     """First obs column matching a batch hint with more than one value, else None."""
     for col in adata.obs.columns:
@@ -242,17 +246,35 @@ def detect_doublets() -> Summary:
     Non-mutating: stores per-cell doublet scores in obs but removes nothing. The agent
     inspects the distribution, chooses a threshold, and calls filter_doublets. Recommends
     the bimodal-valley cutoff when the distribution is bimodal, else median + 3*MAD.
+
+    Guardrails: Scrublet models raw counts, so this refuses to run after normalize (scanpy
+    only warns on stderr, which the agent never sees). When the data has a batch key,
+    Scrublet runs per batch, so the simulated-doublet model is built within a single 10x
+    run rather than across pooled runs.
     """
     adata = SESSION.require_adata()
-    sc.pp.scrublet(adata, random_state=config.SEED)
+    if "counts" in adata.layers or not _looks_like_counts(adata.X):
+        return {
+            "error": "x_not_counts",
+            "message": "Scrublet needs raw counts; run detect_doublets before normalize.",
+        }
+
+    batch_key = _detect_batch_key(adata)
+    sc.pp.scrublet(adata, batch_key=batch_key, random_state=config.SEED)
     scores = np.asarray(adata.obs["doublet_score"], dtype=float)
 
     median = float(np.median(scores))
     mad = float(np.median(np.abs(scores - median)))  # raw (unscaled) MAD, per project spec
     mad_threshold = median + 3 * mad
     valley_threshold, is_bimodal = _valley_threshold(scores)
-    scrublet_auto = adata.uns.get("scrublet", {}).get("threshold")
-    scrublet_auto = float(scrublet_auto) if scrublet_auto is not None else None
+    # Batched runs get one automatic threshold per batch, not a single global one.
+    scrublet_uns = adata.uns.get("scrublet", {})
+    scrublet_auto_per_batch = (
+        {str(b): _as_float(u.get("threshold")) for b, u in scrublet_uns.get("batches", {}).items()}
+        if batch_key
+        else None
+    )
+    scrublet_auto = None if batch_key else _as_float(scrublet_uns.get("threshold"))
 
     recommended = valley_threshold if is_bimodal else mad_threshold
     rule = "bimodal_valley" if is_bimodal else "median+3*MAD"
@@ -261,12 +283,14 @@ def detect_doublets() -> Summary:
 
     return {
         "is_bimodal": is_bimodal,
+        "batch_key": batch_key,
         "score_distribution": _quantile_summary(scores),
         "histogram": {"counts": counts.tolist(), "bin_edges": [round(e, 4) for e in edges]},
         "candidate_thresholds": {
             "bimodal_valley": valley_threshold,
             "median_3mad": round(mad_threshold, 4),
             "scrublet_auto": scrublet_auto,
+            "scrublet_auto_per_batch": scrublet_auto_per_batch,
         },
         "recommended_threshold": round(float(recommended), 4),
         "recommended_rule": rule,
@@ -317,6 +341,8 @@ def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
     sc.pp.log1p(adata)
     sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes)
     n_hvgs = int(adata.var["highly_variable"].sum())
+    # annotate_celltypes needs to know the scale X is on: CellTypist expects 1e4 + log1p.
+    SESSION.normalize_target_sum = float(target_sum)
 
     checkpoint = SESSION.checkpoint("after_normalize")
     return {
@@ -453,20 +479,39 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
     """Annotate cell types with CellTypist (majority voting over Leiden clusters), then
     checkpoint.
 
-    Our normalize output (1e4 counts + log1p) is exactly CellTypist's expected input. Uses
-    the Leiden clusters for majority voting so labels align with clustering. Guardrail:
-    requires clustering first. The resulting checkpoint is the annotated deliverable.
+    CellTypist expects 1e4-normalized, log1p data. That is what normalize produces by
+    default, but target_sum is agent-controllable: if this run normalized to anything else
+    (e.g. 1e6 / CPM), CellTypist would only warn and return degraded labels, so we rebuild
+    its input from the stashed raw counts instead. Uses the Leiden clusters for majority
+    voting so labels align with clustering. Guardrail: requires clustering first. The
+    resulting checkpoint is the annotated deliverable.
     """
     adata = SESSION.require_adata()
     if "leiden" not in adata.obs:
         return {"error": "no_clusters", "message": "Run cluster before annotate_celltypes."}
+
+    target_sum = SESSION.normalize_target_sum
+    rescaled = False
+    ct_input = adata
+    if target_sum is not None and not np.isclose(target_sum, 1e4):
+        if "counts" not in adata.layers:
+            return {
+                "error": "wrong_normalization",
+                "message": f"CellTypist needs target_sum=1e4; this run used {target_sum:g} and "
+                "layers['counts'] is missing, so the input cannot be rescaled.",
+            }
+        ct_input = adata.copy()
+        ct_input.X = adata.layers["counts"].copy()
+        sc.pp.normalize_total(ct_input, target_sum=1e4)
+        sc.pp.log1p(ct_input)
+        rescaled = True
 
     import celltypist
     from celltypist import models
 
     models.download_models(model=[model], force_update=False)
     predictions = celltypist.annotate(
-        adata, model=model, majority_voting=True, over_clustering="leiden"
+        ct_input, model=model, majority_voting=True, over_clustering="leiden"
     )
     labels = predictions.predicted_labels.loc[adata.obs_names, "majority_voting"].astype(str)
     adata.obs["cell_type"] = labels
@@ -479,6 +524,8 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
     checkpoint = SESSION.checkpoint("after_annotate")
     return {
         "model": model,
+        "normalize_target_sum": target_sum,
+        "rescaled_to_1e4_for_celltypist": rescaled,
         "n_cell_types": int(counts.shape[0]),
         "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
         "per_cluster_majority": {str(k): str(v) for k, v in per_cluster.items()},

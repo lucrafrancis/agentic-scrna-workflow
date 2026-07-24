@@ -20,7 +20,8 @@ def main(h5ad_path: str) -> None:
     # Load the dataset into the shared session; tools reach it via SESSION (see session.py).
     # The session derives the run name from the filename, so outputs land in outputs/<name>/.
     SESSION.load(h5ad_path)
-    SESSION.paths.dir.mkdir(parents=True, exist_ok=True)
+    # Fresh run: the tool log and checkpoints must describe this run only (see begin_run).
+    SESSION.begin_run()
 
     prompt = (
         f"Analyze the single-cell dataset at {h5ad_path}. "
@@ -30,7 +31,10 @@ def main(h5ad_path: str) -> None:
     if SESSION.paths.report.exists():
         print(f"Done. Report: {SESSION.paths.report}")
     else:
-        print("Done, but no report.md was generated (the agent did not call generate_report).")
+        print(
+            f"Finished without a report at {SESSION.paths.report}. See the trace above: the run "
+            "either stopped early (stop_reason) or generate_report returned an error."
+        )
 
 
 if __name__ == "__main__":

@@ -2,60 +2,79 @@
 # PBMC3k Single-Cell RNA-seq Analysis Report
 
 ## Overview
-Starting AnnData: 2700 cells x 32738 genes (raw counts, no batch metadata — single sample, single batch). Gene identifiers were confirmed as human gene symbols with the standard `MT-` mitochondrial prefix.
+This report summarizes the end-to-end analysis of the PBMC3k dataset (peripheral blood mononuclear cells), from raw counts through quality control, doublet removal, normalization, clustering, and cell-type annotation.
 
-## Quality Control
-Per-cell QC metrics were computed (n_genes, total_counts, pct_counts_mt). The distribution was typical of PBMC 10x data: median ~817 genes/cell and ~2197 counts/cell, with mitochondrial fraction median 2.0% but a long tail to 22.6%.
+## 1. Dataset & Gene Identifiers
+- **Input**: 2,700 cells × 32,738 genes, raw counts available, no batch key present (single, clean batch).
+- **Gene identifiers**: Human gene symbols confirmed. Mitochondrial genes identified via the `MT-` prefix (13 mitochondrial genes found).
 
-**Thresholds applied** (tutorial-standard, validated against this dataset's distribution):
-- Minimum 200 genes/cell (removed 0 cells — all cells already exceeded this floor)
-- Maximum 5% mitochondrial reads (removed 57 high-mito cells, consistent with the p95=4.0%/p99=5.9% distribution — a clean cutoff isolating a small stressed/dying-cell tail)
-- Minimum 3 cells per gene (removed 19,041 lowly-detected genes)
+## 2. Quality Control
+Per-cell QC metrics were computed (genes per cell, total counts, % mitochondrial reads):
+- Genes/cell: median 817 (range 212–3422)
+- Total counts/cell: median 2197 (range 548–15844)
+- % mitochondrial: median 2.0% (p95 = 4.0%, p99 = 5.9%, max = 22.6%)
 
-Result: **2643 cells x 13,697 genes** after filtering.
+**Thresholds applied** (standard tutorial defaults, well-matched to this dataset's distributions):
+- Minimum genes/cell: 200 (removed 0 cells — all cells already exceeded this floor)
+- Maximum mitochondrial %: 5.0% (removed 57 high-mito, likely stressed/dying cells)
+- Minimum cells per gene: 3 (removed 19,041 genes detected too sparsely to be informative)
 
-## Doublet Detection
-Scrublet was run on the filtered matrix. The doublet-score distribution was **not bimodal** (no clear valley), so per protocol the threshold was set using **median + 3×MAD = 0.10**, flagging 222 cells (8.4%) — a plausible doublet rate for a standard 10x droplet run. These 222 cells were removed.
+**Result**: 2,643 cells × 13,697 genes retained after filtering.
 
-Result: **2421 cells** retained for downstream analysis.
+## 3. Doublet Detection
+Scrublet was run to score putative doublets. The score distribution was **unimodal** (not bimodal), so per protocol the **median + 3×MAD** rule (threshold = 0.10) was used rather than a bimodal-valley cutoff. This flagged 222 cells (8.4%) sitting in the long right tail of the score distribution (scores above ~0.11, up to a max of 0.51), consistent with heterotypic doublets.
 
-## Normalization & Dimensionality Reduction
-Raw counts were stashed, then data were total-count normalized (target_sum=1e4), log1p-transformed, and the top 2000 highly variable genes flagged.
+**Result**: 2,421 cells retained after doublet removal.
 
-Since `inspect_dataset` reported **no batch key** (single clean batch), **PCA** was the appropriate choice over scVI — simpler and sufficient absent any batch-correction need. PCA was run with 50 components (PC1 explains 10.3% of variance; top 10 PCs cumulatively explain 31.2%).
+## 4. Normalization
+Raw counts were stashed for later use (e.g., scVI-style tools), then data were total-count normalized (target sum 1e4), log1p-transformed, and 2,000 highly variable genes flagged for downstream dimensionality reduction.
 
-## Clustering
-Leiden clustering on the PCA representation (resolution=1.0) yielded **9 clusters**, ranging from 7 to 550 cells, with UMAP coordinates computed for visualization.
+## 5. Dimensionality Reduction
+No batch key was present in this dataset (single clean batch), so **PCA** was chosen over scVI as the simpler, appropriate method — batch correction is unnecessary here. PCA was run on the HVG matrix (50 components); the top PCs captured the dominant structure (PC1 = 10.3%, PC2 = 3.5%, PC3 = 2.5% variance), typical for PBMC data with well-separated major lineages.
 
-## Marker Genes & Cell-Type Annotation
-Wilcoxon rank-sum marker identification per cluster, combined with CellTypist (Immune_All_Low model, majority vote per cluster), gave highly concordant results:
+## 6. Clustering
+Leiden clustering (resolution = 1.0) on the PCA representation identified **9 clusters**, ranging in size from 550 to 7 cells. UMAP was computed for visualization.
+
+## 7. Marker Genes & Cell-Type Annotation
+Wilcoxon rank-sum marker gene analysis per cluster, combined with CellTypist (Immune_All_Low model, majority vote per cluster), gave clear, mutually consistent identities:
 
 | Cluster | Size | Top Markers | Annotated Cell Type |
 |---|---|---|---|
-| 0 | 260 | CCL5, NKG7, GZMA, CST7, CD3D | Tem/Trm cytotoxic T cells |
-| 1 | 315 | CD74, CD79A, HLA-DRA, CD79B | B cells |
-| 2 | 515 | LTB, IL32, IL7R, CD3D, CD3E | Tcm/Naive helper T cells |
-| 3 | 550 | RPS12, RPS6, RPL32, RPS27 (ribosomal-high) | Tcm/Naive helper T cells |
-| 4 | 446 | LYZ, S100A9, S100A8, FCN1 | Classical monocytes |
-| 5 | 41 | CD74, HLA-DRB1, HLA-DRB5 | DC |
-| 6 | 140 | GNLY, NKG7, GZMB, PRF1 | CD16+ NK cells |
-| 7 | 147 | LST1, FCER1G, FCGR3A, AIF1 | Non-classical monocytes |
-| 8 | 7 | PF4, GNG11, PPBP, SDPR | Megakaryocytes/platelets |
+| 0 | 260 | CCL5, NKG7, B2M, GZMA, CST7 | Tem/Trm cytotoxic T cells |
+| 1 | 315 | CD74, CD79A, HLA-DRA, CD79B, HLA-DPB1 | B cells |
+| 2 | 515 | LTB, IL32, LDHB, IL7R, CD3D | Tcm/Naive helper T cells |
+| 3 | 550 | RPS12, RPS6, RPL32, RPS27, RPS3A | Tcm/Naive helper T cells |
+| 4 | 446 | LYZ, S100A9, S100A8, TYROBP, FCN1 | Classical monocytes |
+| 5 | 41 | CD74, HLA-DRB1, HLA-DRB5, GAPDH, ACTB | DC |
+| 6 | 140 | GNLY, NKG7, GZMB, PRF1, CTSW | CD16+ NK cells |
+| 7 | 147 | LST1, FCER1G, AIF1, COTL1, FCGR3A | Non-classical monocytes |
+| 8 | 7 | PF4, GNG11, PPBP, SDPR, SPARC | Megakaryocytes/platelets |
 
-Final overall cell-type composition (n=2421 cells):
-- Tcm/Naive helper T cells: 1065 (44.0%)
-- Classical monocytes: 446 (18.4%)
-- B cells: 315 (13.0%)
-- Tem/Trm cytotoxic T cells: 260 (10.7%)
-- Non-classical monocytes: 147 (6.1%)
-- CD16+ NK cells: 140 (5.8%)
-- DC: 41 (1.7%)
-- Megakaryocytes/platelets: 7 (0.3%)
+Marker genes are biologically coherent with the assigned identities:
+- **Cytotoxic T / NK clusters** (0, 6) show canonical cytotoxic granule genes (GZMA/GZMB, PRF1, NKG7, GNLY).
+- **T helper clusters** (2, 3) show CD3D/IL7R/IL32 (cluster 2) and a ribosomal-gene-high signature (cluster 3), consistent with quiescent/naive T cells.
+- **B cells** (1) show CD79A/CD79B/MS4A1/HLA-DR genes.
+- **Monocyte subsets** (4, 7) are distinguished by classical (LYZ, S100A8/9, FCN1) vs. non-classical (FCGR3A, LST1, AIF1) monocyte markers.
+- **DCs** (5) show high HLA-DR/CD74 antigen-presentation genes.
+- **Megakaryocytes/platelets** (8), though a very small cluster (n=7), are unambiguously marked by PF4, PPBP, GNG11, SDPR — classic platelet genes.
 
-Marker genes are canonical and unambiguous for each lineage: CD3D/IL7R/LTB for T cells, CD79A/CD74/MS4A1 for B cells, LYZ/S100A8/S100A9/FCN1 for classical monocytes, FCGR3A/LST1 for non-classical monocytes, GNLY/GZMB/PRF1/NKG7 for NK cells, and PF4/PPBP/GNG11 for platelets. Cluster 3, dominated by ribosomal protein genes, was classified with the neighboring T-cell cluster (2) as Tcm/Naive helper T cells — high ribosomal content is common in resting/naive lymphocytes and is consistent with T-cell identity rather than indicating a technical artifact, given the absence of elevated mitochondrial or stress markers in this cluster.
+## 8. Final Cell-Type Composition
 
-## Conclusion
-This analysis reproduces the expected PBMC3k cell-type landscape: a majority of T cells (both cytotoxic and helper/naive subsets), a substantial monocyte compartment (classical and non-classical), B cells, NK cells, a small dendritic cell population, and a very small megakaryocyte/platelet population — all consistent with canonical human peripheral blood mononuclear cell composition. QC filtering (mitochondrial %, gene count) and doublet removal were applied conservatively using data-driven thresholds, retaining 2421 of 2700 original cells (89.7%) for the final annotated dataset.
+| Cell Type | Count | % of Total |
+|---|---|---|
+| Tcm/Naive helper T cells | 1,065 | 44.0% |
+| Classical monocytes | 446 | 18.4% |
+| B cells | 315 | 13.0% |
+| Tem/Trm cytotoxic T cells | 260 | 10.7% |
+| Non-classical monocytes | 147 | 6.1% |
+| CD16+ NK cells | 140 | 5.8% |
+| DC | 41 | 1.7% |
+| Megakaryocytes/platelets | 7 | 0.3% |
+
+**Total cells in final annotated dataset: 2,421**
+
+## 9. Conclusions
+The analysis recovered the expected major PBMC lineages (T cells, B cells, monocytes, NK cells, dendritic cells, and a small platelet contaminant population) with clear, canonical marker gene support and consistent CellTypist annotation. This is in line with expectations for the well-characterized PBMC3k reference dataset. QC and doublet filtering removed a modest fraction of low-quality/doublet cells (2,700 → 2,421, ~10.3% total removed) without distorting the expected cell-type proportions. No batch correction was needed, as the dataset comprises a single sequencing batch.
 
 ## Figures
 

@@ -76,7 +76,14 @@ def run_agent(initial_user_message: str, verbose: bool = True) -> list[dict]:
                     _trace_text(block.text)
 
         if response.stop_reason != "tool_use":
-            break  # Claude produced a final answer, no tool requested.
+            # "end_turn" is the agent finishing normally. Anything else (notably
+            # "max_tokens", which truncates a tool_use block mid-generation) is the run
+            # being cut short, and must not look like a clean finish.
+            if response.stop_reason != "end_turn":
+                print(f"\n⚠️  Run stopped early: stop_reason={response.stop_reason!r}.")
+                if response.stop_reason == "max_tokens":
+                    print(f"   The response hit MAX_TOKENS ({config.MAX_TOKENS}); raise it in agent/config.py.")
+            break  # Claude produced a final answer, or was cut short.
 
         tool_results = []
         for block in response.content:

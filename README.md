@@ -12,14 +12,19 @@ sensible decisions, rather than just wrapping a chatbot around a pipeline.
 *Result on the PBMC3k dataset: clusters annotated with their cell types. The full write-up the
 agent produced is in [`examples/pbmc3k/report.md`](examples/pbmc3k/report.md).*
 
+Each example folder also carries the decision log for that run —
+[`examples/pbmc3k/tool_calls.jsonl`](examples/pbmc3k/tool_calls.jsonl) and
+[`examples/pbmc_multibatch/tool_calls.jsonl`](examples/pbmc_multibatch/tool_calls.jsonl) — one
+line per tool call, with the arguments the agent chose and the summary it read back.
+
 ## What it decides
 
-A few examples from the PBMC3k run:
+A few examples from the two runs below:
 
 - **PCA vs. scVI.** On PBMC3k it saw there was no batch information and picked PCA. On a second
   dataset with two batches it picked scVI instead, to correct for them.
-- **Doublet cutoff.** The score distribution wasn't cleanly split in two, so it used a
-  `median + 3·MAD` cutoff, and even flagged that Scrublet's automatic threshold looked too loose.
+- **Doublet cutoff.** On both runs the score distribution wasn't cleanly split in two, so it
+  used a `median + 3·MAD` cutoff rather than looking for a bimodal valley that wasn't there.
 - **Adjusting to the data.** On the two-batch set, the usual 5% mitochondrial cutoff would have
   thrown away 82% of the cells (their baseline mito was just higher), so it loosened the cutoff
   to 15% instead of blindly applying the default.
