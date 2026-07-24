@@ -75,6 +75,7 @@ def inspect_dataset() -> Summary:
         "has_raw_counts": _looks_like_counts(adata.X),
         "existing_layers": list(adata.layers.keys()),
         "gene_id_sample": [str(g) for g in adata.var_names[:5]],
+        "duplicate_barcodes_fixed": SESSION.n_duplicate_barcodes,
     }
 
 

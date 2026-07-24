@@ -26,12 +26,20 @@ class Session:
         # Set by check_gene_identifiers; read by compute_qc.
         self.gene_format: str | None = None  # "symbol" | "ensembl" | "other"
         self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
+        # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
+        self.n_duplicate_barcodes = 0
         self._step = 0
 
     def load(self, path) -> ad.AnnData:
         self.name = Path(path).stem
         self.paths = RunPaths(self.name)
-        self.adata = ad.read_h5ad(path)
+        adata = ad.read_h5ad(path)
+        # Deterministic hygiene (no judgement): cell barcodes must be unique for downstream
+        # keying. Record how many collided so inspect_dataset can surface it in the run.
+        self.n_duplicate_barcodes = int(adata.obs_names.duplicated().sum())
+        if self.n_duplicate_barcodes:
+            adata.obs_names_make_unique()
+        self.adata = adata
         return self.adata
 
     def require_adata(self) -> ad.AnnData:
