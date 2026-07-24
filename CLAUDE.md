@@ -89,16 +89,17 @@ Each tool returns a structured summary dict. The agent decides order and argumen
 3. Compute QC metrics
 4. Recommend QC filtering thresholds
 5. Filter low-quality cells and genes
-6. Detect doublets (scrublet)
-7. Normalize & preprocess (log-normalize; HVGs; **stash raw counts first**)
-8. Dimensionality reduction — **two sibling tools, the agent chooses:**
+6. Detect doublets (scrublet) — report score distribution + candidate thresholds
+7. Filter doublets (apply the agent-chosen threshold; mutating)
+8. Normalize & preprocess (log-normalize; HVGs; **stash raw counts first**)
+9. Dimensionality reduction — **two sibling tools, the agent chooses:**
    - `run_pca` — standard, correct for a single clean batch
    - `run_scvi` — VAE latent with batch correction; reads raw counts
-9. Cluster cells (neighbors + Leiden on the chosen representation)
-10. Identify marker genes
-11. Annotate cell types (CellTypist)
-12. Summarize biological findings
-13. Generate a Markdown analysis report
+10. Cluster cells (neighbors + Leiden on the chosen representation)
+11. Identify marker genes
+12. Annotate cell types (CellTypist)
+13. Summarize biological findings
+14. Generate a Markdown analysis report
 
 ## Conventions / guardrails
 
@@ -113,6 +114,11 @@ Biological invariants the agent (and tools) must respect regardless of tool orde
   symbols are unavailable (Ensembl-only), flag and proceed with degraded mito detection —
   do not build a symbol mapping (decided scope: Option A).
 - **QC and filtering before doublet detection**, doublet detection before normalization.
+- **Doublet threshold is agent-chosen, not fixed:** `detect_doublets` reports the score
+  distribution + candidate thresholds (bimodal valley, `median + 3*MAD` (raw MAD), Scrublet
+  automatic); the agent picks — valley if bimodal, else `median + 3*MAD` — and `filter_doublets`
+  applies it. Rationale: a fixed cutoff over/under-calls depending on the dataset; the
+  decision showcases agent judgment.
 - **Dimensionality-reduction decision rule** (encode in the system prompt): if `obs` has a
   batch key with >1 batch, prefer `run_scvi` for its correction; for a single clean batch
   (e.g. pbmc3k), `run_pca` is the correct, simpler choice. The agent picking PCA on pbmc3k

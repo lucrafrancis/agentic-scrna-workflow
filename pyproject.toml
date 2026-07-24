@@ -12,6 +12,7 @@ dependencies = [
     "celltypist>=1.6",
     "leidenalg>=0.10",
     "matplotlib>=3.8",
+    "scikit-image>=0.22",
 ]
 
 [build-system]

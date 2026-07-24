@@ -56,6 +56,39 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["min_genes", "max_pct_mt", "min_cells"],
         },
     },
+    {
+        "name": "detect_doublets",
+        "description": "Run Scrublet and report the doublet-score distribution plus candidate "
+        "thresholds (bimodal valley, median+3*MAD, Scrublet automatic) and a recommendation. "
+        "Non-mutating. Inspect the distribution, then choose a threshold for filter_doublets.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "filter_doublets",
+        "description": "Remove cells whose doublet_score is >= the chosen threshold, then "
+        "checkpoint. Requires detect_doublets first. Explain why you chose this threshold.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "threshold": {"type": "number", "description": "Doublet-score cutoff; cells at or above are removed."}
+            },
+            "required": ["threshold"],
+        },
+    },
+    {
+        "name": "normalize",
+        "description": "Stash raw counts, then total-count normalize, log1p, and flag highly "
+        "variable genes, then checkpoint. Run after doublet handling and before dimensionality "
+        "reduction.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_sum": {"type": "number", "description": "Per-cell count target (default 1e4)."},
+                "n_top_genes": {"type": "integer", "description": "Number of HVGs to flag (default 2000)."},
+            },
+            "required": [],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.
@@ -66,6 +99,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "recommend_qc_thresholds": tools.recommend_qc_thresholds,
     "filter_cells_and_genes": tools.filter_cells_and_genes,
     "detect_doublets": tools.detect_doublets,
+    "filter_doublets": tools.filter_doublets,
     "normalize": tools.normalize,
     "run_pca": tools.run_pca,
     "run_scvi": tools.run_scvi,

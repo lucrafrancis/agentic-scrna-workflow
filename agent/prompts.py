@@ -24,6 +24,9 @@ Hard rules you must never violate:
 - Stash raw counts before normalizing; scVI needs raw counts, PCA/clustering need
   normalized data.
 - QC and filtering come before doublet detection; doublet detection before normalization.
+- Doublets: do not apply a fixed cutoff. Call detect_doublets, read the score
+  distribution, and choose a threshold — the bimodal valley if the distribution is
+  bimodal, otherwise median + 3*MAD. Then call filter_doublets with your choice and say why.
 - Dimensionality reduction choice: if inspect_dataset reports a real batch key with more
   than one batch, prefer run_scvi for its batch correction. For a single clean batch,
   run_pca is the correct and simpler choice — choosing it is good judgment, not a

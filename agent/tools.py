@@ -21,7 +21,10 @@ from typing import Any
 import numpy as np
 import scanpy as sc
 from scipy import sparse
+from scipy.signal import find_peaks
+from scipy.stats import gaussian_kde
 
+from agent import config
 from agent.session import SESSION
 
 Summary = dict[str, Any]
@@ -212,14 +215,112 @@ def filter_cells_and_genes(min_genes: int = 200, max_pct_mt: float = 5.0, min_ce
     }
 
 
+def _valley_threshold(scores: np.ndarray) -> tuple[float | None, bool]:
+    """If the score distribution is bimodal, return the density valley between the two
+    dominant modes and True; otherwise (None, False). Used as the preferred doublet cutoff.
+    """
+    if len(np.unique(scores)) < 10:
+        return None, False
+    grid = np.linspace(float(scores.min()), float(scores.max()), 256)
+    density = gaussian_kde(scores)(grid)
+    peaks, _ = find_peaks(density, height=density.max() * 0.05)
+    if len(peaks) < 2:
+        return None, False
+    lo, hi = sorted(peaks[np.argsort(density[peaks])[-2:]])  # the two tallest peaks
+    valley = lo + int(np.argmin(density[lo : hi + 1]))
+    return float(grid[valley]), True
+
+
 def detect_doublets() -> Summary:
-    """Scrublet via sc.pp.scrublet. Returns predicted doublet rate. Run before normalization."""
-    raise NotImplementedError
+    """Run Scrublet and report the score distribution plus candidate thresholds.
+
+    Non-mutating: stores per-cell doublet scores in obs but removes nothing. The agent
+    inspects the distribution, chooses a threshold, and calls filter_doublets. Recommends
+    the bimodal-valley cutoff when the distribution is bimodal, else median + 3*MAD.
+    """
+    adata = SESSION.require_adata()
+    sc.pp.scrublet(adata, random_state=config.SEED)
+    scores = np.asarray(adata.obs["doublet_score"], dtype=float)
+
+    median = float(np.median(scores))
+    mad = float(np.median(np.abs(scores - median)))  # raw (unscaled) MAD, per project spec
+    mad_threshold = median + 3 * mad
+    valley_threshold, is_bimodal = _valley_threshold(scores)
+    scrublet_auto = adata.uns.get("scrublet", {}).get("threshold")
+    scrublet_auto = float(scrublet_auto) if scrublet_auto is not None else None
+
+    recommended = valley_threshold if is_bimodal else mad_threshold
+    rule = "bimodal_valley" if is_bimodal else "median+3*MAD"
+    n_flagged = int((scores >= recommended).sum())
+    counts, edges = np.histogram(scores, bins=20)
+
+    return {
+        "is_bimodal": is_bimodal,
+        "score_distribution": _quantile_summary(scores),
+        "histogram": {"counts": counts.tolist(), "bin_edges": [round(e, 4) for e in edges]},
+        "candidate_thresholds": {
+            "bimodal_valley": valley_threshold,
+            "median_3mad": round(mad_threshold, 4),
+            "scrublet_auto": scrublet_auto,
+        },
+        "recommended_threshold": round(float(recommended), 4),
+        "recommended_rule": rule,
+        "n_flagged_at_recommended": n_flagged,
+        "pct_flagged_at_recommended": round(100 * n_flagged / len(scores), 2),
+    }
 
 
-def normalize() -> Summary:
-    """Stash raw counts to layers['counts'], then log-normalize + HVGs. Guardrail: counts first."""
-    raise NotImplementedError
+def filter_doublets(threshold: float) -> Summary:
+    """Remove cells with doublet_score >= threshold, then checkpoint. Mutating.
+
+    The agent supplies the threshold it chose from detect_doublets' candidates.
+    """
+    adata = SESSION.require_adata()
+    if "doublet_score" not in adata.obs:
+        return {"error": "doublets_not_detected", "message": "Call detect_doublets first."}
+
+    before = int(adata.n_obs)
+    adata = adata[adata.obs["doublet_score"] < threshold].copy()
+    SESSION.adata = adata
+    after = int(adata.n_obs)
+    checkpoint = SESSION.checkpoint("after_doublet_filter")
+    return {
+        "threshold": threshold,
+        "before_cells": before,
+        "after_cells": after,
+        "removed": before - after,
+        "pct_removed": round(100 * (before - after) / before, 2),
+        "checkpoint": checkpoint,
+    }
+
+
+def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
+    """Stash raw counts, log-normalize, and flag HVGs, then checkpoint. Mutating.
+
+    Guardrails: raw counts are copied to layers['counts'] BEFORE normalizing (scVI needs
+    them); refuses to run if X is not counts or if counts are already stashed (idempotency).
+    HVGs are flagged, not subset — later steps (markers) need all genes.
+    """
+    adata = SESSION.require_adata()
+    if "counts" in adata.layers:
+        return {"error": "already_normalized", "message": "layers['counts'] exists; normalize already ran."}
+    if not _looks_like_counts(adata.X):
+        return {"error": "x_not_counts", "message": "X does not look like raw counts; refusing to normalize."}
+
+    adata.layers["counts"] = adata.X.copy()
+    sc.pp.normalize_total(adata, target_sum=target_sum)
+    sc.pp.log1p(adata)
+    sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes)
+    n_hvgs = int(adata.var["highly_variable"].sum())
+
+    checkpoint = SESSION.checkpoint("after_normalize")
+    return {
+        "target_sum": target_sum,
+        "n_top_genes_requested": n_top_genes,
+        "n_hvgs_flagged": n_hvgs,
+        "raw_counts_stashed": True,
+        "checkpoint": checkpoint,
+    }
 
 
 def run_pca(n_comps: int = 50) -> Summary:
