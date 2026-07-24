@@ -74,6 +74,3 @@ run.py          # entry point
 examples/       # saved example runs, one folder per dataset
 CLAUDE.md       # notes on the design and why things are the way they are
 ```
-
-It's a proof of concept: one dataset, and the interesting part is the decision-making rather
-than the pipeline itself. More detail on the design is in [`CLAUDE.md`](CLAUDE.md).
