@@ -1,6 +1,6 @@
 """Analysis tools.
 
-THE CONTRACT (see CLAUDE.md):
+THE CONTRACT:
   Every tool is a deterministic Python function that does real work AND returns a
   structured, JSON-serializable summary dict. That dict is the *only* thing the LLM
   sees — it decides the next step entirely from it. A tool that returns None is a bug.
@@ -8,9 +8,6 @@ THE CONTRACT (see CLAUDE.md):
 Tools operate on a shared AnnData held by the running session (see loop.py). Each tool
 validates the state it expects and returns a clear error summary (not a stack trace) the
 agent can react to.
-
-All functions below are stubs — signatures and return contracts only. Implementations
-land in the next step.
 """
 
 from __future__ import annotations
@@ -29,8 +26,10 @@ from agent.session import SESSION
 
 Summary = dict[str, Any]
 
-# obs columns that commonly denote a batch/sample grouping, checked by inspect_dataset.
-_BATCH_HINTS = {"batch", "sample", "donor", "patient", "subject", "condition", "dataset"}
+# obs columns that commonly denote a technical batch/sample grouping, checked by
+# inspect_dataset. Deliberately excludes experimental-design columns such as `condition` or
+# `treatment`: correcting those away would remove the biology the analysis is about.
+_BATCH_HINTS = {"batch", "sample", "donor", "patient", "subject", "dataset"}
 
 # Quantiles reported for every QC metric distribution.
 _QUANTILES = {"min": 0.0, "p25": 0.25, "median": 0.5, "p75": 0.75, "p95": 0.95, "p99": 0.99, "max": 1.0}
@@ -328,7 +327,9 @@ def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
 
     Guardrails: raw counts are copied to layers['counts'] BEFORE normalizing (scVI needs
     them); refuses to run if X is not counts or if counts are already stashed (idempotency).
-    HVGs are flagged, not subset — later steps (markers) need all genes.
+    HVGs are flagged, not subset — later steps (markers) need all genes. When the data has a
+    batch key, HVGs are ranked within each batch and combined, so the selection is not driven
+    by the batch effect that run_scvi is there to correct.
     """
     adata = SESSION.require_adata()
     if "counts" in adata.layers:
@@ -339,7 +340,8 @@ def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
     adata.layers["counts"] = adata.X.copy()
     sc.pp.normalize_total(adata, target_sum=target_sum)
     sc.pp.log1p(adata)
-    sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes)
+    batch_key = _detect_batch_key(adata)
+    sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes, batch_key=batch_key)
     n_hvgs = int(adata.var["highly_variable"].sum())
     # annotate_celltypes needs to know the scale X is on: CellTypist expects 1e4 + log1p.
     SESSION.normalize_target_sum = float(target_sum)
@@ -349,6 +351,7 @@ def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
         "target_sum": target_sum,
         "n_top_genes_requested": n_top_genes,
         "n_hvgs_flagged": n_hvgs,
+        "hvg_batch_key": batch_key,
         "raw_counts_stashed": True,
         "checkpoint": checkpoint,
     }

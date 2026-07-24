@@ -60,6 +60,19 @@ def test_doublets_run_per_batch(batched_h5ad):
     json.dumps(summary)
 
 
+def test_hvgs_selected_within_batch(batched_h5ad):
+    """With a batch key, HVGs are ranked per batch so the batch effect doesn't drive them."""
+    SESSION.load(batched_h5ad)
+    tools.check_gene_identifiers()
+    tools.compute_qc()
+    tools.filter_cells_and_genes(min_genes=5, max_pct_mt=90, min_cells=1)
+    summary = tools.normalize(n_top_genes=50)
+
+    assert summary["hvg_batch_key"] == "batch"
+    assert summary["n_hvgs_flagged"] > 0
+    json.dumps(summary)
+
+
 def test_normalize_records_target_sum(synthetic_h5ad):
     SESSION.load(synthetic_h5ad)
     tools.check_gene_identifiers()
