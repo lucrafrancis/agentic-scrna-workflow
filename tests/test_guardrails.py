@@ -31,6 +31,15 @@ def test_filter_needs_qc(loaded):
     assert "error" in tools.filter_cells_and_genes(min_genes=5, max_pct_mt=90, min_cells=1)
 
 
+def test_detect_doublets_refuses_normalized_data(loaded):
+    """Scrublet on log-normalized X only warns on stderr; the agent must see an error."""
+    tools.check_gene_identifiers()
+    tools.compute_qc()
+    tools.filter_cells_and_genes(min_genes=5, max_pct_mt=90, min_cells=1)
+    tools.normalize(n_top_genes=50)
+    assert tools.detect_doublets()["error"] == "x_not_counts"
+
+
 def test_filter_doublets_needs_detection(loaded):
     assert tools.filter_doublets(threshold=0.1)["error"] == "doublets_not_detected"
 

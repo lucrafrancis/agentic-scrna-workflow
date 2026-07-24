@@ -49,6 +49,26 @@ def test_mito_genes_found_in_qc(synthetic_h5ad):
     assert tools.compute_qc()["n_mito_genes_found"] == 5
 
 
+def test_doublets_run_per_batch(batched_h5ad):
+    """With a batch key, Scrublet's simulated-doublet model is built within each batch."""
+    SESSION.load(batched_h5ad)
+    summary = tools.detect_doublets()
+
+    assert summary["batch_key"] == "batch"
+    per_batch = summary["candidate_thresholds"]["scrublet_auto_per_batch"]
+    assert set(per_batch) == {"A", "B"}
+    json.dumps(summary)
+
+
+def test_normalize_records_target_sum(synthetic_h5ad):
+    SESSION.load(synthetic_h5ad)
+    tools.check_gene_identifiers()
+    tools.compute_qc()
+    tools.filter_cells_and_genes(min_genes=5, max_pct_mt=90, min_cells=1)
+    tools.normalize(target_sum=1e6, n_top_genes=50)
+    assert SESSION.normalize_target_sum == 1e6
+
+
 def test_normalize_is_idempotent_guarded(synthetic_h5ad):
     SESSION.load(synthetic_h5ad)
     tools.check_gene_identifiers()

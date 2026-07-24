@@ -26,6 +26,8 @@ class Session:
         # Set by check_gene_identifiers; read by compute_qc.
         self.gene_format: str | None = None  # "symbol" | "ensembl" | "other"
         self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
+        # Set by normalize; read by annotate_celltypes (CellTypist expects 1e4 + log1p).
+        self.normalize_target_sum: float | None = None
         # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
         self.n_duplicate_barcodes = 0
         self._step = 0
@@ -41,6 +43,21 @@ class Session:
             adata.obs_names_make_unique()
         self.adata = adata
         return self.adata
+
+    def begin_run(self) -> None:
+        """Clear this dataset's output dir of the previous run's provenance artifacts.
+
+        The tool log is append-only and checkpoint numbering restarts at 1 each run, so
+        re-running a dataset would otherwise interleave two runs in one tool_calls.jsonl and
+        leave run 1's checkpoints (e.g. 06_after_scvi.h5ad) sitting next to run 2's as if
+        they were one sequence. The audit trail is a deliverable — it must describe exactly
+        one run. Figures, report and annotated .h5ad are simply overwritten in place.
+        """
+        self.paths.dir.mkdir(parents=True, exist_ok=True)
+        self.paths.tool_log.unlink(missing_ok=True)
+        for stale in self.paths.checkpoints.glob("*.h5ad"):
+            stale.unlink()
+        self._step = 0
 
     def require_adata(self) -> ad.AnnData:
         if self.adata is None:

@@ -12,7 +12,11 @@ from pathlib import Path
 # --- LLM ---------------------------------------------------------------------
 # Switch to "claude-opus-4-8" if the agent's *reasoning* (tool choice) looks weak.
 MODEL = "claude-sonnet-5"
-MAX_TOKENS = 4096
+# Headroom for the largest single generation in a run: generate_report's narrative, passed
+# as one tool argument (~5k characters in the committed examples). Too low a ceiling
+# truncates that tool_use block, and the run ends with stop_reason="max_tokens" instead of
+# a report.
+MAX_TOKENS = 16384
 # Safety valve so a misbehaving agent can't loop forever.
 MAX_TURNS = 40
 

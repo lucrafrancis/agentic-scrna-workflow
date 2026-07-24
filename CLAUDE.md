@@ -116,6 +116,10 @@ Biological invariants the agent (and tools) must respect regardless of tool orde
   symbols are unavailable (Ensembl-only), flag and proceed with degraded mito detection —
   do not build a symbol mapping (decided scope: Option A).
 - **QC and filtering before doublet detection**, doublet detection before normalization.
+  `detect_doublets` enforces the second half itself (refuses once `layers["counts"]` exists
+  or X stops looking like counts) — scanpy only warns on stderr, which never reaches the
+  agent. It also passes the detected batch key to `sc.pp.scrublet`, so the simulated-doublet
+  model is built within a batch, not across pooled runs.
 - **Doublet threshold is agent-chosen, not fixed:** `detect_doublets` reports the score
   distribution + candidate thresholds (bimodal valley, `median + 3*MAD` (raw MAD), Scrublet
   automatic); the agent picks — valley if bimodal, else `median + 3*MAD` — and `filter_doublets`
@@ -125,6 +129,13 @@ Biological invariants the agent (and tools) must respect regardless of tool orde
   batch key with >1 batch, prefer `run_scvi` for its correction; for a single clean batch
   (e.g. pbmc3k), `run_pca` is the correct, simpler choice. The agent picking PCA on pbmc3k
   is *good judgment*, not a missed feature.
+- **CellTypist input scale:** `normalize`'s `target_sum` is agent-controllable, but
+  CellTypist expects 1e4 + log1p. `normalize` records the value on `SESSION`, and
+  `annotate_celltypes` rebuilds its input from `layers["counts"]` when it isn't 1e4 rather
+  than accepting degraded labels.
+- **One run per output directory:** `run.py` calls `SESSION.begin_run()`, which truncates
+  `tool_calls.jsonl` and clears stale checkpoints. The audit trail is a deliverable — it
+  must describe exactly one run.
 - Tools should be defensive about the `adata` state they receive and return a clear error
   summary (not a stack trace) the agent can react to.
 
