@@ -421,9 +421,27 @@ def cluster(resolution: float = 1.0) -> Summary:
     }
 
 
-def identify_markers() -> Summary:
-    """Rank genes per cluster. Returns top markers per cluster."""
-    raise NotImplementedError
+def identify_markers(n_genes: int = 10) -> Summary:
+    """Rank marker genes per Leiden cluster (Wilcoxon) and return the top genes per cluster.
+
+    Reads the log-normalized X (preserved through PCA). Non-mutating (writes ranking to uns),
+    so it does not checkpoint. Guardrail: requires clustering first.
+    """
+    adata = SESSION.require_adata()
+    if "leiden" not in adata.obs:
+        return {"error": "no_clusters", "message": "Run cluster before identify_markers."}
+
+    sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon")
+    names = adata.uns["rank_genes_groups"]["names"]
+    groups = list(names.dtype.names)
+    top = {g: [str(names[g][i]) for i in range(min(n_genes, len(names[g])))] for g in groups}
+
+    return {
+        "method": "wilcoxon",
+        "n_clusters": len(groups),
+        "n_genes_per_cluster": n_genes,
+        "top_markers_per_cluster": top,
+    }
 
 
 def annotate_celltypes() -> Summary:

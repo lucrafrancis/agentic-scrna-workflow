@@ -129,6 +129,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "identify_markers",
+        "description": "Rank marker genes per cluster (Wilcoxon) and return the top genes per "
+        "cluster, for interpreting cluster identity. Requires clustering first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n_genes": {"type": "integer", "description": "Top marker genes to return per cluster (default 10)."}
+            },
+            "required": [],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.
