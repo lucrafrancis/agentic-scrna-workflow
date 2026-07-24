@@ -391,8 +391,34 @@ def run_scvi(batch_key: str | None = None, max_epochs: int | None = None) -> Sum
 
 
 def cluster(resolution: float = 1.0) -> Summary:
-    """Neighbors + Leiden on the chosen representation (PCA or scVI). Returns n clusters, sizes."""
-    raise NotImplementedError
+    """Neighbor graph + Leiden clustering on the chosen representation, plus UMAP, then
+    checkpoint.
+
+    Reads SESSION.representation (X_pca or X_scVI, whichever the DR tool set) so clustering
+    follows the agent's earlier choice. Guardrail: a representation must exist.
+    """
+    adata = SESSION.require_adata()
+    rep = SESSION.representation
+    if rep is None or rep not in adata.obsm:
+        return {"error": "no_representation", "message": "Run run_pca or run_scvi before clustering."}
+
+    sc.pp.neighbors(adata, use_rep=rep, random_state=config.SEED)
+    sc.tl.leiden(
+        adata, resolution=resolution, flavor="igraph", n_iterations=2,
+        directed=False, random_state=config.SEED,
+    )
+    sc.tl.umap(adata, random_state=config.SEED)
+
+    sizes = adata.obs["leiden"].value_counts().sort_index()
+    checkpoint = SESSION.checkpoint("after_cluster")
+    return {
+        "representation_used": rep,
+        "resolution": resolution,
+        "n_clusters": int(sizes.shape[0]),
+        "cluster_sizes": {str(k): int(v) for k, v in sizes.items()},
+        "umap_computed": True,
+        "checkpoint": checkpoint,
+    }
 
 
 def identify_markers() -> Summary:

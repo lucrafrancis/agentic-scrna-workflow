@@ -116,6 +116,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "cluster",
+        "description": "Build a neighbor graph on the chosen representation, run Leiden "
+        "clustering, and compute UMAP coordinates, then checkpoint. Requires a dimensionality "
+        "reduction (run_pca or run_scvi) first. Higher resolution yields more clusters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "resolution": {"type": "number", "description": "Leiden resolution (default 1.0); higher = more clusters."}
+            },
+            "required": [],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.
