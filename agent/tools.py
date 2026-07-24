@@ -444,9 +444,41 @@ def identify_markers(n_genes: int = 10) -> Summary:
     }
 
 
-def annotate_celltypes() -> Summary:
-    """CellTypist annotation. Returns per-cluster majority cell type + confidence."""
-    raise NotImplementedError
+def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
+    """Annotate cell types with CellTypist (majority voting over Leiden clusters), then
+    checkpoint.
+
+    Our normalize output (1e4 counts + log1p) is exactly CellTypist's expected input. Uses
+    the Leiden clusters for majority voting so labels align with clustering. Guardrail:
+    requires clustering first. The resulting checkpoint is the annotated deliverable.
+    """
+    adata = SESSION.require_adata()
+    if "leiden" not in adata.obs:
+        return {"error": "no_clusters", "message": "Run cluster before annotate_celltypes."}
+
+    import celltypist
+    from celltypist import models
+
+    models.download_models(model=[model], force_update=False)
+    predictions = celltypist.annotate(
+        adata, model=model, majority_voting=True, over_clustering="leiden"
+    )
+    labels = predictions.predicted_labels.loc[adata.obs_names, "majority_voting"].astype(str)
+    adata.obs["cell_type"] = labels
+
+    per_cluster = adata.obs.groupby("leiden", observed=True)["cell_type"].agg(
+        lambda s: s.value_counts().index[0]
+    )
+    counts = adata.obs["cell_type"].value_counts()
+
+    checkpoint = SESSION.checkpoint("after_annotate")
+    return {
+        "model": model,
+        "n_cell_types": int(counts.shape[0]),
+        "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
+        "per_cluster_majority": {str(k): str(v) for k, v in per_cluster.items()},
+        "checkpoint": checkpoint,
+    }
 
 
 def summarize_findings() -> Summary:

@@ -141,6 +141,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "annotate_celltypes",
+        "description": "Annotate cell types with CellTypist (majority voting over Leiden "
+        "clusters). Returns per-cluster cell-type labels and overall counts. Requires "
+        "clustering first. Default model suits immune/PBMC data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "CellTypist model (default Immune_All_Low.pkl)."}
+            },
+            "required": [],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.
