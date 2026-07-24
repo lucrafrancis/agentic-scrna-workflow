@@ -77,4 +77,8 @@ Processed data, UMAP embeddings, and QC figures accompany this report, and the f
 
 ![umap](figures/umap.png)
 
+![marker_dotplot_clusters](figures/marker_dotplot_clusters.png)
+
+![marker_dotplot_celltype](figures/marker_dotplot_celltype.png)
+
 ![qc_violin](figures/qc_violin.png)

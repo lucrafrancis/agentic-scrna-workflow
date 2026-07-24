@@ -545,6 +545,25 @@ def generate_report(report_markdown: str) -> Summary:
         plt.close()
         figures.append(path)
 
+    # Marker dotplots: top 5 DEGs per group (expression + fraction expressing at a glance),
+    # one grouped by Leiden cluster and one by cell type. DEGs are computed into dedicated
+    # keys so the cluster-level markers from identify_markers (uns['rank_genes_groups']) stay
+    # intact.
+    def _marker_dotplot(groupby: str, key: str, filename: str) -> None:
+        sc.tl.rank_genes_groups(adata, groupby, method="wilcoxon", key_added=key)
+        sc.pl.rank_genes_groups_dotplot(
+            adata, n_genes=5, key=key, groupby=groupby, standard_scale="var", show=False
+        )
+        path = paths.figures / filename
+        plt.savefig(path, dpi=120, bbox_inches="tight")
+        plt.close()
+        figures.append(path)
+
+    if "leiden" in adata.obs and adata.obs["leiden"].nunique() > 1:
+        _marker_dotplot("leiden", "dea_leiden", "marker_dotplot_clusters.png")
+    if "cell_type" in adata.obs and adata.obs["cell_type"].nunique() > 1:
+        _marker_dotplot("cell_type", "dea_cell_type", "marker_dotplot_celltype.png")
+
     qc_cols = [c for c in ("n_genes_by_counts", "total_counts", "pct_counts_mt") if c in adata.obs]
     if qc_cols:
         sc.pl.violin(adata, qc_cols, multi_panel=True, show=False)
