@@ -8,14 +8,19 @@ run state (e.g. which representation clustering should use) and owns checkpointi
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import anndata as ad
 
-from agent import config
+from agent.config import RunPaths
 
 
 class Session:
     def __init__(self) -> None:
         self.adata: ad.AnnData | None = None
+        # Set by load(): the dataset name (input filename stem) and its output locations.
+        self.name: str | None = None
+        self.paths: RunPaths | None = None
         # Set by the dimensionality-reduction tool; read by clustering. e.g. "X_pca" / "X_scVI".
         self.representation: str | None = None
         # Set by check_gene_identifiers; read by compute_qc.
@@ -24,6 +29,8 @@ class Session:
         self._step = 0
 
     def load(self, path) -> ad.AnnData:
+        self.name = Path(path).stem
+        self.paths = RunPaths(self.name)
         self.adata = ad.read_h5ad(path)
         return self.adata
 
@@ -35,9 +42,9 @@ class Session:
     def checkpoint(self, label: str) -> str:
         """Persist the current AnnData to a numbered checkpoint. Returns the path."""
         adata = self.require_adata()
-        config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        self.paths.checkpoints.mkdir(parents=True, exist_ok=True)
         self._step += 1
-        path = config.CHECKPOINT_DIR / f"{self._step:02d}_{label}.h5ad"
+        path = self.paths.checkpoints / f"{self._step:02d}_{label}.h5ad"
         adata.write_h5ad(path)
         return str(path)
 

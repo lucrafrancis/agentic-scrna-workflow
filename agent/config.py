@@ -6,6 +6,7 @@ one-line edit and nothing else in the codebase depends on it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
@@ -22,11 +23,42 @@ SEED = 0
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "outputs"
-FIGURE_DIR = OUTPUT_DIR / "figures"
-CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
-REPORT_PATH = OUTPUT_DIR / "report.md"
-ANNOTATED_PATH = OUTPUT_DIR / "annotated.h5ad"
-TOOL_LOG_PATH = OUTPUT_DIR / "tool_calls.jsonl"
+EXAMPLES_DIR = ROOT / "examples"
+
+
+@dataclass(frozen=True)
+class RunPaths:
+    """Per-dataset output locations, namespaced by dataset name (the input filename stem).
+
+    A run on data/pbmc3k.h5ad writes everything under outputs/pbmc3k/, so runs on different
+    datasets never collide. The Session derives the name and holds an instance of this.
+    """
+
+    name: str
+
+    @property
+    def dir(self) -> Path:
+        return OUTPUT_DIR / self.name
+
+    @property
+    def figures(self) -> Path:
+        return self.dir / "figures"
+
+    @property
+    def checkpoints(self) -> Path:
+        return self.dir / "checkpoints"
+
+    @property
+    def report(self) -> Path:
+        return self.dir / "report.md"
+
+    @property
+    def annotated(self) -> Path:
+        return self.dir / "annotated.h5ad"
+
+    @property
+    def tool_log(self) -> Path:
+        return self.dir / "tool_calls.jsonl"
 
 
 def set_global_seed(seed: int = SEED) -> None:

@@ -35,7 +35,7 @@ clarity and transparency of the agentic mechanism over feature completeness.
   `AnnData` through the module-level `SESSION`. Keeps the LLM-facing schemas clean.
 - **Checkpoint after each mutating step**: the ~5 mutating tools (filter, doublets,
   normalize, DR, cluster, annotate) call `SESSION.checkpoint(label)`, writing a numbered
-  `outputs/checkpoints/NN_label.h5ad` and returning the path in their summary. Non-mutating
+  `outputs/<name>/checkpoints/NN_label.h5ad` and returning the path in their summary. Non-mutating
   tools do not checkpoint. Rationale: recovery (skip re-running scVI) + an *effects* audit
   trail that pairs with the *decisions* trail in `tool_calls.jsonl`. The final checkpoint is
   the annotated-`.h5ad` deliverable.
@@ -55,9 +55,11 @@ agentic-scrna-workflow/
 │   ├── tools.py         # tool functions (each returns a summary dict)
 │   ├── schemas.py       # JSON tool definitions sent to Claude
 │   ├── prompts.py       # the runtime system prompt
-│   └── config.py        # model name, seeds, paths
+│   ├── session.py       # shared AnnData + per-run output paths + checkpointing
+│   └── config.py        # model name, seeds, path roots, RunPaths
 ├── data/                # input .h5ad (gitignored)
-├── outputs/             # figures, annotated .h5ad, report.md
+├── outputs/<name>/      # per dataset: figures, checkpoints, report.md, annotated .h5ad, tool_calls.jsonl
+├── examples/<name>/     # committed sample run per dataset
 ├── run.py               # entrypoint: python run.py data/pbmc3k.h5ad
 └── pyproject.toml
 ```
@@ -133,7 +135,7 @@ Biological invariants the agent (and tools) must respect regardless of tool orde
 - Annotated `.h5ad` output.
 - Markdown report + a tool-call log for the run.
 
-**Done:** a single `uv run python run.py data/pbmc3k.h5ad` produces `outputs/report.md`
+**Done:** a single `uv run python run.py data/pbmc3k.h5ad` produces `outputs/pbmc3k/report.md`
 with QC, a UMAP, clusters, and CellTypist annotations — where the sequence of analysis
 steps was chosen by the agent's own tool calls, not hard-coded.
 

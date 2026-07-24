@@ -20,12 +20,14 @@ import anthropic
 from agent import config
 from agent.prompts import SYSTEM_PROMPT
 from agent.schemas import TOOL_FUNCTIONS, TOOL_SCHEMAS
+from agent.session import SESSION
 
 
 def _log_tool_call(name: str, args: dict, summary: dict) -> None:
     """Append one tool call to the JSONL run log — the audit trail of the agent's reasoning."""
-    config.TOOL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with config.TOOL_LOG_PATH.open("a") as f:
+    log_path = SESSION.paths.tool_log
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a") as f:
         f.write(json.dumps({"tool": name, "args": args, "summary": summary}) + "\n")
 
 

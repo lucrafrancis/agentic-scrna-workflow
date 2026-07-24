@@ -523,13 +523,14 @@ def generate_report(report_markdown: str) -> Summary:
     import matplotlib.pyplot as plt
 
     adata = SESSION.require_adata()
-    config.FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+    paths = SESSION.paths
+    paths.figures.mkdir(parents=True, exist_ok=True)
     figures: list = []
 
     if "X_umap" in adata.obsm:
         colors = [c for c in ("cell_type", "leiden") if c in adata.obs]
         sc.pl.umap(adata, color=colors, show=False, wspace=0.4)
-        path = config.FIGURE_DIR / "umap.png"
+        path = paths.figures / "umap.png"
         plt.savefig(path, dpi=120, bbox_inches="tight")
         plt.close()
         figures.append(path)
@@ -537,23 +538,23 @@ def generate_report(report_markdown: str) -> Summary:
     qc_cols = [c for c in ("n_genes_by_counts", "total_counts", "pct_counts_mt") if c in adata.obs]
     if qc_cols:
         sc.pl.violin(adata, qc_cols, multi_panel=True, show=False)
-        path = config.FIGURE_DIR / "qc_violin.png"
+        path = paths.figures / "qc_violin.png"
         plt.savefig(path, dpi=120, bbox_inches="tight")
         plt.close()
         figures.append(path)
 
-    adata.write_h5ad(config.ANNOTATED_PATH)
+    adata.write_h5ad(paths.annotated)
 
     figures_md = ""
     if figures:
         figures_md = "\n\n## Figures\n\n" + "\n\n".join(
             f"![{p.stem}](figures/{p.name})" for p in figures
         )
-    config.REPORT_PATH.write_text(report_markdown.rstrip() + figures_md + "\n")
+    paths.report.write_text(report_markdown.rstrip() + figures_md + "\n")
 
     return {
-        "report_path": str(config.REPORT_PATH),
+        "report_path": str(paths.report),
         "figures": [str(p) for p in figures],
-        "annotated_h5ad": str(config.ANNOTATED_PATH),
+        "annotated_h5ad": str(paths.annotated),
         "report_chars": len(report_markdown),
     }

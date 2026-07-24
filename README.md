@@ -7,10 +7,10 @@ and writes up the results at the end. There's no fixed script; the model chooses
 The point was to see whether an LLM could act like an analysis assistant that actually makes
 sensible decisions, rather than just wrapping a chatbot around a pipeline.
 
-![UMAP of the annotated PBMC3k result](examples/umap.png)
+![UMAP of the annotated PBMC3k result](examples/pbmc3k/umap.png)
 
 *Result on the PBMC3k dataset: clusters annotated with their cell types. The full write-up the
-agent produced is in [`examples/report.md`](examples/report.md).*
+agent produced is in [`examples/pbmc3k/report.md`](examples/pbmc3k/report.md).*
 
 ## What it decides
 
@@ -51,7 +51,7 @@ agent/
 scripts/
   fetch_pbmc3k.py
 run.py          # entry point
-examples/       # a saved example run
+examples/       # saved example runs, one folder per dataset
 CLAUDE.md       # notes on the design and why things are the way they are
 ```
 

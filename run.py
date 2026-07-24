@@ -16,18 +16,19 @@ from agent.session import SESSION
 
 def main(h5ad_path: str) -> None:
     config.set_global_seed()
-    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load the dataset into the shared session; tools reach it via SESSION (see session.py).
+    # The session derives the run name from the filename, so outputs land in outputs/<name>/.
     SESSION.load(h5ad_path)
+    SESSION.paths.dir.mkdir(parents=True, exist_ok=True)
 
     prompt = (
         f"Analyze the single-cell dataset at {h5ad_path}. "
         "Inspect it first, then proceed through an appropriate analysis and produce a report."
     )
     run_agent(prompt)
-    if config.REPORT_PATH.exists():
-        print(f"Done. Report: {config.REPORT_PATH}")
+    if SESSION.paths.report.exists():
+        print(f"Done. Report: {SESSION.paths.report}")
     else:
         print("Done, but no report.md was generated (the agent did not call generate_report).")
 
