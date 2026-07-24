@@ -69,6 +69,7 @@ agent/
   config.py     # model name, seed, paths
 scripts/
   fetch_pbmc3k.py
+tests/          # fast offline tests (no API, no downloads): uv run pytest
 run.py          # entry point
 examples/       # saved example runs, one folder per dataset
 CLAUDE.md       # notes on the design and why things are the way they are
