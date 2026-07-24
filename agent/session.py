@@ -1,4 +1,4 @@
-"""Run-scoped state shared across tools (Option A in CLAUDE.md).
+"""Run-scoped state shared across tools.
 
 Tools operate on one AnnData for the duration of a run. The LLM only ever sees JSON
 summaries, never the matrix, so tools reach the working object through this module-level

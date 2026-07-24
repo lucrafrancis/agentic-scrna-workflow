@@ -14,8 +14,7 @@ from typing import Any, Callable
 
 from agent import tools
 
-# Anthropic tool schema list. We expose ONLY implemented tools so the agent cannot call a
-# stub. Entries are added here as each tool is implemented.
+# Anthropic tool schema list: the complete set of actions available to the agent.
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "inspect_dataset",
