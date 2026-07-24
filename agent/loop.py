@@ -38,8 +38,23 @@ def _run_tool(name: str, args: dict) -> dict:
         return {"error": type(exc).__name__, "message": str(exc)}
 
 
-def run_agent(initial_user_message: str) -> list[dict]:
-    """Drive the analysis to completion. Returns the full message transcript."""
+def _trace_text(text: str) -> None:
+    print(f"\n\U0001f9e0 {text.strip()}")
+
+
+def _trace_tool(name: str, args: dict, summary: dict) -> None:
+    arg_str = ", ".join(f"{k}={v}" for k, v in args.items())
+    print(f"\U0001f527 {name}({arg_str})")
+    keys = "error" if "error" in summary else ", ".join(list(summary)[:6])
+    print(f"   → {keys}")
+
+
+def run_agent(initial_user_message: str, verbose: bool = True) -> list[dict]:
+    """Drive the analysis to completion. Returns the full message transcript.
+
+    With verbose=True, prints a live trace: the agent's reasoning before each tool call and
+    the keys of each tool result. This is the readable record of the agent making decisions.
+    """
     client = anthropic.Anthropic()
     messages: list[dict] = [{"role": "user", "content": initial_user_message}]
 
@@ -53,6 +68,11 @@ def run_agent(initial_user_message: str) -> list[dict]:
         )
         messages.append({"role": "assistant", "content": response.content})
 
+        if verbose:
+            for block in response.content:
+                if block.type == "text" and block.text.strip():
+                    _trace_text(block.text)
+
         if response.stop_reason != "tool_use":
             break  # Claude produced a final answer, no tool requested.
 
@@ -62,6 +82,8 @@ def run_agent(initial_user_message: str) -> list[dict]:
                 continue
             summary = _run_tool(block.name, block.input)
             _log_tool_call(block.name, block.input, summary)
+            if verbose:
+                _trace_tool(block.name, block.input, summary)
             tool_results.append(
                 {
                     "type": "tool_result",
