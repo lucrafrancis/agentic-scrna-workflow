@@ -26,7 +26,10 @@ def main(h5ad_path: str) -> None:
         "Inspect it first, then proceed through an appropriate analysis and produce a report."
     )
     run_agent(prompt)
-    print(f"Done. See {config.REPORT_PATH}")
+    if config.REPORT_PATH.exists():
+        print(f"Done. Report: {config.REPORT_PATH}")
+    else:
+        print("Done, but no report.md was generated (the agent did not call generate_report).")
 
 
 if __name__ == "__main__":

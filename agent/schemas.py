@@ -154,6 +154,29 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "summarize_findings",
+        "description": "Consolidate the final analysis state (cell counts, cluster-to-"
+        "cell-type mapping, top markers, cell-type counts) into one factual summary to write "
+        "the report from. Non-mutating.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "generate_report",
+        "description": "Render UMAP and QC figures, write the annotated .h5ad, and assemble "
+        "the final Markdown report. Provide the report narrative as report_markdown; the tool "
+        "adds the figures. Call this last.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "report_markdown": {
+                    "type": "string",
+                    "description": "The full analysis report as Markdown, written by you from the findings.",
+                }
+            },
+            "required": ["report_markdown"],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.

@@ -482,10 +482,78 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
 
 
 def summarize_findings() -> Summary:
-    """Assemble the biological narrative from prior tool outputs."""
-    raise NotImplementedError
+    """Consolidate the final analysis state into one factual summary for the write-up.
+
+    Non-mutating: reads the current adata (cell counts, cluster->cell-type mapping, top
+    markers, cell-type counts) so the agent can compose the report narrative from a single
+    joined view rather than re-reading each earlier tool result.
+    """
+    adata = SESSION.require_adata()
+    out: Summary = {
+        "n_cells": int(adata.n_obs),
+        "n_genes": int(adata.n_vars),
+        "representation": SESSION.representation,
+    }
+    if "leiden" in adata.obs:
+        out["n_clusters"] = int(adata.obs["leiden"].nunique())
+    if "cell_type" in adata.obs:
+        out["cell_type_counts"] = {str(k): int(v) for k, v in adata.obs["cell_type"].value_counts().items()}
+        per_cluster = adata.obs.groupby("leiden", observed=True)["cell_type"].agg(
+            lambda s: s.value_counts().index[0]
+        )
+        out["cluster_to_cell_type"] = {str(k): str(v) for k, v in per_cluster.items()}
+    if "rank_genes_groups" in adata.uns:
+        names = adata.uns["rank_genes_groups"]["names"]
+        out["top_markers_per_cluster"] = {
+            g: [str(names[g][i]) for i in range(min(5, len(names[g])))] for g in names.dtype.names
+        }
+    return out
 
 
-def generate_report() -> Summary:
-    """Write outputs/report.md (+ figures). Returns the report path."""
-    raise NotImplementedError
+def generate_report(report_markdown: str) -> Summary:
+    """Render figures, write the annotated .h5ad, and assemble outputs/report.md.
+
+    The agent supplies the narrative (report_markdown); this tool handles the deterministic
+    artifacts: UMAP + QC figures, the annotated deliverable, and stitching them into the
+    report. Returns the paths written.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    adata = SESSION.require_adata()
+    config.FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+    figures: list = []
+
+    if "X_umap" in adata.obsm:
+        colors = [c for c in ("cell_type", "leiden") if c in adata.obs]
+        sc.pl.umap(adata, color=colors, show=False, wspace=0.4)
+        path = config.FIGURE_DIR / "umap.png"
+        plt.savefig(path, dpi=120, bbox_inches="tight")
+        plt.close()
+        figures.append(path)
+
+    qc_cols = [c for c in ("n_genes_by_counts", "total_counts", "pct_counts_mt") if c in adata.obs]
+    if qc_cols:
+        sc.pl.violin(adata, qc_cols, multi_panel=True, show=False)
+        path = config.FIGURE_DIR / "qc_violin.png"
+        plt.savefig(path, dpi=120, bbox_inches="tight")
+        plt.close()
+        figures.append(path)
+
+    adata.write_h5ad(config.ANNOTATED_PATH)
+
+    figures_md = ""
+    if figures:
+        figures_md = "\n\n## Figures\n\n" + "\n\n".join(
+            f"![{p.stem}](figures/{p.name})" for p in figures
+        )
+    config.REPORT_PATH.write_text(report_markdown.rstrip() + figures_md + "\n")
+
+    return {
+        "report_path": str(config.REPORT_PATH),
+        "figures": [str(p) for p in figures],
+        "annotated_h5ad": str(config.ANNOTATED_PATH),
+        "report_chars": len(report_markdown),
+    }

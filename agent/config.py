@@ -25,6 +25,7 @@ OUTPUT_DIR = ROOT / "outputs"
 FIGURE_DIR = OUTPUT_DIR / "figures"
 CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
 REPORT_PATH = OUTPUT_DIR / "report.md"
+ANNOTATED_PATH = OUTPUT_DIR / "annotated.h5ad"
 TOOL_LOG_PATH = OUTPUT_DIR / "tool_calls.jsonl"
 
 
