@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
-# Switch to "claude-opus-4-8" if the agent's *reasoning* (tool choice) looks weak.
+# Switch to "claude-opus-5" if the agent's *reasoning* (tool choice) looks weak.
 MODEL = "claude-sonnet-5"
 # Headroom for the largest single generation in a run: generate_report's narrative, passed
 # as one tool argument (~5k characters in the committed examples). Too low a ceiling
@@ -66,10 +66,12 @@ class RunPaths:
 
 
 def set_global_seed(seed: int = SEED) -> None:
-    """Seed every stochastic library we use, so a run is reproducible.
+    """Seed every stochastic library we use, so each computation is reproducible.
 
-    Called once at the start of a run. scvi-tools is seeded lazily inside its tool
-    to avoid importing torch until it is actually needed.
+    Called once at the start of a run. scvi-tools is seeded lazily inside its tool to avoid
+    importing torch until it is actually needed. Note that this fixes the numerics, not the
+    analysis path: the agent's tool choices are sampled from the model and can vary between
+    runs on the same input.
     """
     import random
 

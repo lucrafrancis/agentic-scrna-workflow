@@ -1,11 +1,12 @@
 # Agentic Single-Cell RNA-seq Analysis
 
-This is a small project where an LLM (Claude) runs a single-cell RNA-seq analysis on its own.
-It looks at the data, decides what to do next based on what it finds, calls the right tool,
-and writes up the results at the end. There's no fixed script; the model chooses each step.
+This is a small project where an LLM (Claude) runs a single-cell RNA-seq analysis. Each tool
+hands back a summary of what it found; the model reads that, picks the next tool and the
+parameters to call it with, and writes up the results at the end. The step order and the
+thresholds come from the model, not from a script.
 
-The point was to see whether an LLM could act like an analysis assistant that actually makes
-sensible decisions, rather than just wrapping a chatbot around a pipeline.
+The point was to see how much of a real analysis an LLM can drive, and to keep the mechanism
+visible: the loop is ~40 lines against the raw API, not a framework.
 
 ![UMAP of the annotated PBMC3k result](examples/pbmc3k/figures/umap.png)
 
@@ -23,11 +24,14 @@ A few examples from the two runs below:
 
 - **PCA vs. scVI.** On PBMC3k it saw there was no batch information and picked PCA. On a second
   dataset with two batches it picked scVI instead, to correct for them.
-- **Doublet cutoff.** On both runs the score distribution wasn't cleanly split in two, so it
-  used a `median + 3·MAD` cutoff rather than looking for a bimodal valley that wasn't there.
 - **Adjusting to the data.** On the two-batch set, the usual 5% mitochondrial cutoff would have
   thrown away 82% of the cells (their baseline mito was just higher), so it loosened the cutoff
   to 15% instead of blindly applying the default.
+- **Doublet cutoff.** Nothing is hard-coded: the tool reports the score distribution and several
+  candidate cutoffs, and the agent picks one and states why in the report.
+
+Both runs happen to follow a fairly standard QC → cluster → annotate arc, which is what these
+datasets call for. The variation is in the parameters and the choice of method at each step.
 
 ## A run with batches
 
@@ -77,5 +81,4 @@ scripts/
 tests/          # fast offline tests (no API, no downloads): uv run pytest
 run.py          # entry point
 examples/       # saved example runs, one folder per dataset
-CLAUDE.md       # notes on the design and why things are the way they are
 ```
