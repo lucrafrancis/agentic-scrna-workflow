@@ -324,13 +324,70 @@ def normalize(target_sum: float = 1e4, n_top_genes: int = 2000) -> Summary:
 
 
 def run_pca(n_comps: int = 50) -> Summary:
-    """PCA on the normalized matrix. Correct choice for a single clean batch."""
-    raise NotImplementedError
+    """PCA on the normalized matrix (HVGs), then checkpoint. Sets the session representation.
+
+    Guardrail: requires normalize to have run (reads log-normalized X, not raw counts).
+    Does not overwrite X (PCA zero-centers internally), so markers/annotation still see the
+    log-normalized values.
+    """
+    adata = SESSION.require_adata()
+    if "highly_variable" not in adata.var:
+        return {"error": "not_normalized", "message": "Call normalize before run_pca."}
+
+    n_hvgs = int(adata.var["highly_variable"].sum())
+    n_comps = int(min(n_comps, adata.n_obs - 1, n_hvgs - 1))
+    sc.pp.pca(adata, n_comps=n_comps, use_highly_variable=True)
+    SESSION.representation = "X_pca"
+
+    var_ratio = np.asarray(adata.uns["pca"]["variance_ratio"], dtype=float)
+    checkpoint = SESSION.checkpoint("after_pca")
+    return {
+        "representation": "X_pca",
+        "n_comps": n_comps,
+        "variance_ratio_top10": [round(float(v), 4) for v in var_ratio[:10]],
+        "cumulative_variance": round(float(var_ratio.sum()), 4),
+        "checkpoint": checkpoint,
+    }
 
 
-def run_scvi(batch_key: str | None = None) -> Summary:
-    """scVI latent from raw counts (layers['counts']), with batch correction. Not for single batch."""
-    raise NotImplementedError
+def run_scvi(batch_key: str | None = None, max_epochs: int | None = None) -> Summary:
+    """scVI latent from raw counts (layers['counts'], HVGs), then checkpoint.
+
+    Guardrail: requires layers['counts'] (stashed by normalize) — scVI models counts, not
+    log-normalized data. Trains on the HVG subset. Prefer PCA for a single clean batch;
+    scVI's value is batch correction when batch_key spans multiple batches.
+    """
+    adata = SESSION.require_adata()
+    if "counts" not in adata.layers:
+        return {"error": "no_raw_counts", "message": "scVI needs raw counts; call normalize first."}
+    if batch_key is not None and batch_key not in adata.obs:
+        return {"error": "invalid_batch_key", "message": f"'{batch_key}' is not an obs column."}
+
+    import scvi  # heavy (torch); import lazily so the rest of the toolset stays light
+
+    scvi.settings.seed = config.SEED
+    use_hvg = "highly_variable" in adata.var
+    train = adata[:, adata.var["highly_variable"]].copy() if use_hvg else adata.copy()
+    scvi.model.SCVI.setup_anndata(train, layer="counts", batch_key=batch_key)
+    model = scvi.model.SCVI(train)
+    model.train(max_epochs=max_epochs)
+
+    adata.obsm["X_scVI"] = model.get_latent_representation()
+    SESSION.representation = "X_scVI"
+    try:
+        epochs_trained = len(next(iter(model.history.values())))
+    except (StopIteration, AttributeError):
+        epochs_trained = None
+
+    checkpoint = SESSION.checkpoint("after_scvi")
+    return {
+        "representation": "X_scVI",
+        "n_latent": int(adata.obsm["X_scVI"].shape[1]),
+        "batch_key": batch_key,
+        "n_hvgs_used": int(train.n_vars),
+        "epochs_trained": epochs_trained,
+        "checkpoint": checkpoint,
+    }
 
 
 def cluster(resolution: float = 1.0) -> Summary:

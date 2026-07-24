@@ -89,6 +89,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "run_pca",
+        "description": "PCA on the normalized HVG matrix; sets the representation used for "
+        "clustering. The right choice for a single clean batch (no batch key). Requires "
+        "normalize first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n_comps": {"type": "integer", "description": "Number of principal components (default 50)."}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "run_scvi",
+        "description": "Train scVI on raw counts (HVGs) to get a latent embedding with batch "
+        "correction; sets the representation used for clustering. Prefer over PCA only when a "
+        "batch key spans multiple batches. Requires normalize first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "batch_key": {"type": "string", "description": "obs column identifying batches to correct."},
+                "max_epochs": {"type": "integer", "description": "Training epochs (default: scVI auto)."},
+            },
+            "required": [],
+        },
+    },
 ]
 
 # name -> callable. The loop dispatches through this; it never imports tools directly.
