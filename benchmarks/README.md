@@ -1,33 +1,53 @@
 # Benchmarks
 
-Repeated runs of the agent, to measure two things:
+Repeated runs of the agent on one prompt, to measure two things:
 
 - **Accuracy:** do the agent's cell-type labels match published labels?
 - **Consistency:** does the agent make the same choices when run again on the same data?
 
-## Runs
+## Running
 
-5 runs each on PBMC3k and the two-batch PBMC set. Each run is saved to
-`runs/<dataset>/<run_id>/`:
+    uv run python benchmarks/run_benchmark.py prompts/pbmc3k.txt --runs 5   # spends API tokens
+    uv run python benchmarks/score.py pbmc3k                                # offline
 
-| File | Contents |
-|---|---|
-| `tool_calls.jsonl` | Decision log: every tool call, its arguments, and the summary returned |
-| `report.md` | The agent's write-up |
-| `labels.csv` | Per cell: barcode, cluster, agent label |
-| `run_meta.json` | Model, temperature, git commit, timestamp, wall time, tokens in/out, cost, number of tool calls |
+Each run is saved to `runs/<dataset>/<run_id>/`: the decision log (`tool_calls.jsonl`), the
+report, the prompt, token use and estimated cost (`usage.jsonl`), per-cell labels
+(`labels.csv`: cluster, final label, original CellTypist label), and `run_meta.json` (model,
+git commit, runtime).
 
 ## Scoring
 
-A script reads every run folder and writes `metrics.csv`, one row per run.
+`score.py` writes to `results/<dataset>/`:
 
-- **Decisions:** PCA vs. scVI, mitochondrial cutoff, doublet cutoff, clustering resolution,
-  number of clusters, and the cell types found. These are taken from `tool_calls.jsonl`.
-- **Accuracy (PBMC3k only):** the reference is the published PBMC3k labels (scanpy's processed
-  PBMC3k, 2,638 cells), matched by barcode. Scores are the adjusted Rand index (ARI, a 0–1
-  measure of how closely two groupings of the same cells agree) and per-cell-type agreement.
-- **Label mapping:** agent and reference names differ (e.g. "Classical monocytes" vs.
-  "CD14+ Monocytes"), so both are mapped to a fixed set of broad cell types. The mapping is
-  committed before any benchmark run, so it cannot be tuned to the results.
+- `metrics.csv`: one row per run. The decisions (embedding, mitochondrial cutoff, doublet
+  threshold and % removed, number of clusters and cell types, clusters relabelled), then cells
+  scored, % of reference cells removed, accuracy, ARI, report attempts, cost and runtime.
+- `summary.md`: how many runs made each decision, and mean accuracy, ARI and cost.
+- `confusion.png`: where each published cell type ended up, pooled over runs: an agent type,
+  "Removed" (dropped by the agent's QC or doublet filter) or "Not scored" (ambiguous label).
 
-The two-batch set has no reference labels, so it is scored on consistency only.
+**Reference labels** are the published labels (PBMC3k: scanpy's processed PBMC3k, 2,638 cells
+from the Seurat tutorial; Kang: the authors' labels). They are one analyst's annotation, not
+ground truth.
+
+**Label mapping** (`label_mapping.csv`): agent and published names differ (e.g. "Classical
+monocytes" vs "CD14+ Monocytes"), so both are mapped to shared broad types. A label mapped to
+an empty broad type is ambiguous (e.g. MAIT cells, neither CD4 nor CD8 T) and its cells are
+not scored. A label missing from the mapping stops scoring rather than being guessed.
+
+**Accuracy** is the % of scored cells (kept by the agent, unambiguous label) whose broad type
+matches the published one. **ARI** (adjusted Rand index) measures how closely the two
+groupings of the same cells agree, from 0 (chance) to 1 (identical).
+
+## Acceptance thresholds (PBMC3k)
+
+Set before the benchmark runs:
+
+| Metric | Acceptable |
+|---|---|
+| Accuracy | ≥ 90% |
+| ARI | ≥ 0.80 |
+| Embedding and annotation model | same in 5 of 5 runs |
+| Mitochondrial cutoff, doublet threshold, number of clusters | same in ≥ 4 of 5 runs |
+| Report attempts | ≤ 2 |
+| Cost | < $0.50 per run |

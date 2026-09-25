@@ -540,6 +540,56 @@ def _volcano_figure(figdir: Path) -> Figure | None:
     return Figure("de_volcano.png", "Volcano plots per cell type", caption, (r"differential|\bde\b|expression",))
 
 
+# A canonical marker must pass all three in at least one cell type to be shown. Fold change
+# and % expressing matter as much as padj: cell-level p-values treat cells as independent.
+_CANON_PADJ, _CANON_LFC, _CANON_PCT = 0.05, 1.0, 0.25
+
+
+def _canonical_dotplot_figure(adata, log: list[Entry], figdir: Path) -> Figure | None:
+    """Dotplot of the canonical markers the agent checked (check_markers), kept only where
+    they are enriched in at least one final cell type, grouped by the type they mark."""
+    import matplotlib.pyplot as plt
+    import scanpy as sc
+
+    checked = list(dict.fromkeys(g for e in log if e["tool"] == "check_markers" and "error" not in e["summary"]
+                                 for g in e["args"]["genes"] if g in adata.var_names))
+    if not checked or "cell_type" not in adata.obs or adata.obs["cell_type"].nunique() < 2:
+        return None
+    key = "canonical_cell_type"
+    sc.tl.rank_genes_groups(adata, "cell_type", method="wilcoxon", key_added=key, pts=True, n_genes=adata.n_vars)
+    stats = sc.get.rank_genes_groups_df(adata, group=None, key=key)
+    stats = stats[stats["names"].isin(checked)]
+    passing = stats[(stats["pvals_adj"] < _CANON_PADJ) & (stats["logfoldchanges"] > _CANON_LFC)
+                    & (stats["pct_nz_group"] >= _CANON_PCT)]
+    if passing.empty:
+        return None
+    # Each gene goes in the block of the type where it is most enriched.
+    best = passing.sort_values("logfoldchanges", ascending=False).drop_duplicates("names")
+    order = [str(c) for c in adata.obs["cell_type"].cat.categories] if hasattr(adata.obs["cell_type"], "cat") \
+        else sorted(adata.obs["cell_type"].astype(str).unique())
+    blocks = {ct: [g for g in checked if g in set(best.loc[best["group"].astype(str) == ct, "names"])] for ct in order}
+    blocks = {ct: genes for ct, genes in blocks.items() if genes}
+    # Rows follow the gene blocks, so the enriched dots run down a diagonal; types without a
+    # shown marker go last.
+    rows = list(blocks) + [ct for ct in order if ct not in blocks]
+    genes = [g for block in blocks.values() for g in block]
+    with _style():
+        sc.pl.dotplot(adata, var_names=genes, groupby="cell_type", categories_order=rows,
+                      standard_scale="var", show=False)
+        _save(plt.gcf(), figdir / "marker_dotplot_canonical.png")
+    kept = sum(len(g) for g in blocks.values())
+    dropped = [g for g in checked if g not in set(best["names"])]
+    caption = (f"Canonical markers checked by the agent before accepting or changing labels ({kept} of "
+               f"{len(checked)} shown), ordered by the cell type each marks most, so the enriched dots run down the diagonal. A gene is shown if, in at least one "
+               f"type, padj < {_CANON_PADJ}, log2FC > {_CANON_LFC:g} and it is expressed in at least "
+               f"{100 * _CANON_PCT:.0f}% of cells. Dot size: fraction of cells expressing; colour: mean expression "
+               "scaled per gene.")
+    if dropped:
+        caption += " Not enriched in any type: " + ", ".join(dropped) + "."
+    return Figure("marker_dotplot_canonical.png", "Canonical marker genes per cell type", caption,
+                  (r"annot|cell.type", r"marker"))
+
+
 def draw_figures(adata, log: list[Entry], batch_key: str | None, figdir: Path) -> list[Figure]:
     import matplotlib
 
@@ -550,6 +600,7 @@ def draw_figures(adata, log: list[Entry], batch_key: str | None, figdir: Path) -
         _doublet_figure(log, figdir),
         _umap_figure(adata, batch_key, figdir),
         _dotplot_figure(adata, "leiden", figdir),
+        _canonical_dotplot_figure(adata, log, figdir),
         _composition_figure(adata, figdir),
         _dotplot_figure(adata, "cell_type", figdir),
         _composition_change_figure(figdir),

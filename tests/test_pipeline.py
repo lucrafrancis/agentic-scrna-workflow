@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
+import pandas as pd
+
 from agent import tools
 from agent.session import SESSION
 
@@ -155,3 +158,20 @@ def test_check_markers_reports_rank_stats_and_absence(logged_run):
     assert result["not_found"] == ["NOT_A_GENE"]
     assert tools.check_markers(["GENE0"], clusters=["99"])["error"] == "bad_clusters"
     json.dumps(result)
+
+
+def test_canonical_dotplot_uses_checked_markers(logged_run):
+    """The canonical-marker dotplot shows the genes the agent checked, keeping only those
+    enriched in some cell type. GENE0 marks population A; GENE200 is background noise."""
+    from agent import report
+
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    adata.obs["cell_type"] = pd.Categorical(np.where(a_cells, "Type A", "Type B"))
+    logged_run("check_markers", genes=["GENE0", "GENE200"])
+    SESSION.paths.figures.mkdir(parents=True, exist_ok=True)
+
+    fig = report._canonical_dotplot_figure(adata, report.read_log(SESSION.paths.tool_log), SESSION.paths.figures)
+
+    assert fig is not None and (SESSION.paths.figures / fig.name).exists()
+    assert "1 of 2 shown" in fig.caption and "Not enriched in any type: GENE200" in fig.caption

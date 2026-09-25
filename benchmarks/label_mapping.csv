@@ -1,0 +1,28 @@
+label,broad_type
+CD4 T cells,CD4 T
+CD8 T cells,CD8 T
+B cells,B
+NK cells,NK
+CD14+ Monocytes,CD14 monocyte
+FCGR3A+ Monocytes,FCGR3A monocyte
+Dendritic cells,DC
+Megakaryocytes,Megakaryocyte
+Tcm/Naive helper T cells,CD4 T
+Tem/Effector helper T cells,CD4 T
+Regulatory T cells,CD4 T
+CD4+ Memory T cells,CD4 T
+CD4+ T cells,CD4 T
+Tem/Trm cytotoxic T cells,CD8 T
+Tcm/Naive cytotoxic T cells,CD8 T
+CD8+ T cells,CD8 T
+MAIT cells,
+Naive B cells,B
+Memory B cells,B
+CD16+ NK cells,NK
+Classical monocytes,CD14 monocyte
+Non-classical monocytes,FCGR3A monocyte
+DC,DC
+DC2,DC
+pDC,DC
+Megakaryocytes/platelets,Megakaryocyte
+Platelets,Megakaryocyte
