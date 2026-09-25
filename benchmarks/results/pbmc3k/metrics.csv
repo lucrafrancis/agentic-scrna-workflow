@@ -1,0 +1,6 @@
+run_id,embedding,annotation_model,mito_cutoff,doublet_threshold,pct_doublets_removed,n_clusters,n_cell_types,n_relabelled,cells_scored,pct_removed,accuracy,ari,report_attempts,cost_usd,runtime_s
+20260925_145417,PCA,Immune_All_Low,5.0,0.1,8.4,9,8,0,2419 of 2638,8.3,94.9,0.903,2,0.2202,129.0
+20260925_145626,PCA,Immune_All_Low,5.0,0.1,8.4,9,8,0,2419 of 2638,8.3,94.9,0.903,2,0.2163,140.5
+20260925_145847,PCA,Immune_All_Low,5.0,0.1,8.4,9,8,0,2419 of 2638,8.3,94.9,0.903,2,0.1862,119.7
+20260925_150046,PCA,Immune_All_Low,5.0,0.1,8.4,9,8,0,2419 of 2638,8.3,94.9,0.903,2,0.2307,141.7
+20260925_150308,PCA,Immune_All_Low,5.0,0.1,8.4,9,8,0,2419 of 2638,8.3,94.9,0.903,1,0.139,114.1
