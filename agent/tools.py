@@ -544,7 +544,8 @@ def summarize_findings() -> Summary:
 
     Non-mutating: reads the current adata (cell counts, cluster->cell-type mapping, top
     markers, cell-type counts) so the agent can compose the report narrative from a single
-    joined view rather than re-reading each earlier tool result.
+    joined view rather than re-reading each earlier tool result. Also returns the facts and
+    tables the report cites through placeholders.
     """
     adata = SESSION.require_adata()
     out: Summary = {
@@ -565,25 +566,53 @@ def summarize_findings() -> Summary:
         out["top_markers_per_cluster"] = {
             g: [str(names[g][i]) for i in range(min(5, len(names[g])))] for g in names.dtype.names
         }
+    # What the report may cite: placeholder names with their current values. The agent reads
+    # the values to interpret them but writes only the placeholders.
+    log = report.read_log(SESSION.paths.tool_log)
+    out["facts"] = report.facts(log, adata)
+    out["tables_available"] = sorted(report.tables(log, adata))
+    out["tables_required"] = [t for t in report.REQUIRED_TABLES if t in out["tables_available"]]
     return out
 
 
-def generate_report(report_markdown: str) -> Summary:
-    """Render figures, write the annotated .h5ad, and assemble outputs/report.md.
+# Rejections before generate_report writes the report anyway, with the failed checks shown.
+_MAX_REPORT_REJECTIONS = 2
 
-    The agent supplies the narrative (report_markdown); report.build_report adds the
-    deterministic parts (run summary, decisions table, captioned figures, Methods) from the
-    tool log. Returns the paths written.
+
+def generate_report(report_markdown: str) -> Summary:
+    """Check and render the narrative, draw figures, and write the report and annotated .h5ad.
+
+    Every number in the narrative must be a placeholder (see summarize_findings), so values
+    come from code rather than the model. Any problem rejects the whole report with a list
+    of all issues and nothing is written; after _MAX_REPORT_REJECTIONS it is written with
+    the unresolved problems shown at the top. report.build_report then adds the run
+    summary, decisions table, captioned figures and Methods from the tool log.
     """
     adata = SESSION.require_adata()
     paths = SESSION.paths
-    text, figures = report.build_report(adata, report_markdown, _detect_batch_key(adata))
+    log = report.read_log(paths.tool_log)
+    narrative, problems = report.render(report_markdown, log, adata)
+    if problems and SESSION.report_attempts < _MAX_REPORT_REJECTIONS:
+        SESSION.report_attempts += 1
+        return {
+            "error": "report_rejected",
+            "message": "Nothing was written. Fix ALL of these problems, then call generate_report "
+            "again with the complete report.",
+            "problems": problems,
+            "available_facts": sorted(report.facts(log, adata)),
+            "available_tables": sorted(report.tables(log, adata)),
+        }
+
+    text, figures = report.build_report(adata, narrative, _detect_batch_key(adata), warnings=problems)
     adata.write_h5ad(paths.annotated)
     paths.report.write_text(text)
 
-    return {
+    out: Summary = {
         "report_path": str(paths.report),
         "figures": [str(paths.figures / f.name) for f in figures],
         "annotated_h5ad": str(paths.annotated),
         "report_chars": len(report_markdown),
     }
+    if problems:
+        out["warning"] = f"Written after {SESSION.report_attempts} rejections with these problems shown: {problems}"
+    return out

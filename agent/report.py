@@ -338,8 +338,9 @@ def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
                    frameon=False, legend_fontsize=8)
         _save(plt.gcf(), figdir / "umap.png")
     rep = {"X_scVI": "the scVI latent space", "X_pca": "PCA"}.get(SESSION.representation, SESSION.representation)
-    caption = (f"UMAP of {_n(adata.n_obs)} cells computed on {rep}, coloured by "
-               + ", ".join(titles[c].lower() for c in colors) + ".")
+    names = [titles[c] if c == "leiden" else titles[c].lower() for c in colors]
+    by = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    caption = f"UMAP of {_n(adata.n_obs)} cells computed on {rep}, coloured by {by}."
     if batch_key in colors:
         caption += " Batches that overlap within each cell type indicate the integration worked."
     return Figure("umap.png", "UMAP", caption, (r"cluster", r"dimension|embedding|integration|umap"))
@@ -553,15 +554,240 @@ def _version(package: str) -> str:
         return "unknown"
 
 
+# --- facts and tables the narrative cites (placeholders) ----------------------
+#
+# The agent never types a number into the report. It writes {{name}} for a fact below,
+# {{celltype:NAME}} for one cell type's size, {{celltypes:A|B}} for several combined, and
+# {{table:name}} for a code-built table; render() fills them in and rejects the report if
+# any other number appears.
+
+_QC_METRICS = {"genes": "n_genes_by_counts", "counts": "total_counts", "mito": "pct_counts_mt"}
+_MARKERS_SHOWN = 5
+
+
+def _p(value) -> str:
+    return f"{_num(value)}%"
+
+
+def facts(log: list[Entry], adata) -> dict[str, str]:
+    f: dict[str, str] = {}
+    if e := _last(log, "inspect_dataset"):
+        s = e["summary"]
+        f["input.n_cells"], f["input.n_genes"] = _n(s["n_cells"]), _n(s["n_genes"])
+        if s.get("candidate_batch_key"):
+            f["input.n_batches"], f["input.batch_key"] = str(s["n_batches"]), s["candidate_batch_key"]
+    if e := _last(log, "compute_qc"):
+        s = e["summary"]
+        f["qc.n_mito_genes"] = str(s["n_mito_genes_found"])
+        for short, col in _QC_METRICS.items():
+            for q, v in s[col].items():
+                f[f"qc.{short}.{q}"] = _p(v) if short == "mito" else _n(round(v))
+    if e := _last(log, "recommend_qc_thresholds"):
+        d, imp = e["summary"]["recommended"], e["summary"]["projected_impact"]
+        f["default.max_pct_mt"], f["default.min_genes"], f["default.min_cells"] = _p(d["max_pct_mt"]), _n(d["min_genes"]), _n(d["min_cells"])
+        f["default.mito_cells_removed"] = _n(imp["cells_removed_max_pct_mt"])
+        f["default.mito_pct_removed"] = _pct(imp["cells_removed_max_pct_mt"], imp["cells_total"])
+    if e := _last(log, "filter_cells_and_genes"):
+        s = e["summary"]
+        a = s["applied"]
+        f["filter.max_pct_mt"], f["filter.min_genes"], f["filter.min_cells"] = _p(a["max_pct_mt"]), _n(a["min_genes"]), _n(a["min_cells"])
+        f["filter.cells_before"], f["filter.cells_after"] = _n(s["before"]["n_cells"]), _n(s["after"]["n_cells"])
+        f["filter.cells_removed"] = _n(s["removed"]["cells"])
+        f["filter.pct_cells_removed"] = _pct(s["removed"]["cells"], s["before"]["n_cells"])
+        f["filter.genes_before"], f["filter.genes_after"] = _n(s["before"]["n_genes"]), _n(s["after"]["n_genes"])
+        f["filter.genes_removed"] = _n(s["removed"]["genes"])
+    if e := _last(log, "detect_doublets"):
+        s = e["summary"]
+        c = s["candidate_thresholds"]
+        f["doublet.distribution"] = "bimodal" if s["is_bimodal"] else "not bimodal"
+        f["doublet.score_median"], f["doublet.score_max"] = _num(s["score_distribution"]["median"]), _num(s["score_distribution"]["max"])
+        f["doublet.median_3mad"] = _num(c["median_3mad"])
+        if c.get("bimodal_valley") is not None:
+            f["doublet.valley"] = _num(c["bimodal_valley"])
+        autos = [c["scrublet_auto"]] if c.get("scrublet_auto") is not None else [
+            v for v in (c.get("scrublet_auto_per_batch") or {}).values() if v is not None]
+        if autos:
+            f["doublet.scrublet_auto"] = " / ".join(_num(v) for v in autos)
+            if SESSION.doublet_scores is not None:
+                flagged = int((SESSION.doublet_scores >= float(np.mean(autos))).sum())
+                f["doublet.scrublet_auto_cells_flagged"] = _n(flagged)
+    if e := _last(log, "filter_doublets"):
+        s = e["summary"]
+        f["doublet.threshold"] = _num(s["threshold"])
+        if det := _last(log, "detect_doublets"):
+            f["doublet.rule"] = _nearest_rule(s["threshold"], det["summary"]["candidate_thresholds"]) or "custom threshold"
+        f["doublet.cells_before"], f["doublet.cells_after"] = _n(s["before_cells"]), _n(s["after_cells"])
+        f["doublet.cells_removed"], f["doublet.pct_removed"] = _n(s["removed"]), _p(s["pct_removed"])
+    if e := _last(log, "normalize"):
+        s = e["summary"]
+        f["norm.target_sum"], f["norm.n_hvgs"] = _num(s["target_sum"]), _n(s["n_hvgs_flagged"])
+    if e := _last(log, "run_pca"):
+        s = e["summary"]
+        f["pca.n_comps"] = str(s["n_comps"])
+        for k, v in enumerate(s["variance_ratio_top10"][:3], start=1):
+            f[f"pca.pc{k}_variance"] = _p(round(100 * v, 1))
+    if e := _last(log, "run_scvi"):
+        s = e["summary"]
+        f["scvi.n_latent"], f["scvi.n_hvgs"] = str(s["n_latent"]), _n(s["n_hvgs_used"])
+        if s.get("epochs_trained"):
+            f["scvi.epochs"] = str(s["epochs_trained"])
+    if e := _last(log, "cluster"):
+        s = e["summary"]
+        sizes = s["cluster_sizes"].values()
+        f["cluster.resolution"], f["cluster.n"] = f"{s['resolution']:.1f}", str(s["n_clusters"])
+        f["cluster.smallest"], f["cluster.largest"] = _n(min(sizes)), _n(max(sizes))
+    f["markers.n_shown"] = str(_MARKERS_SHOWN)
+    if "cell_type" in adata.obs:
+        f["celltype.n"] = str(adata.obs["cell_type"].nunique())
+    if e := _last(log, "inspect_dataset"):
+        total = e["summary"]["n_cells"]
+        f["final.n_cells"], f["final.n_genes"] = _n(adata.n_obs), _n(adata.n_vars)
+        f["final.cells_removed"] = _n(total - adata.n_obs)
+        f["final.pct_removed"] = _pct(total - adata.n_obs, total)
+    return f
+
+
+def _celltypes(adata, names: list[str]) -> str | None:
+    if "cell_type" not in adata.obs:
+        return None
+    counts = adata.obs["cell_type"].value_counts()
+    if any(n not in counts.index for n in names):
+        return None
+    k = int(counts[names].sum())
+    return f"{_n(k)} cells ({_pct(k, adata.n_obs)})"
+
+
+def tables(log: list[Entry], adata) -> dict[str, str]:
+    out: dict[str, str] = {}
+    obs = adata.obs
+    if "leiden" in obs and "cell_type" in obs:
+        names = adata.uns["rank_genes_groups"]["names"] if "rank_genes_groups" in adata.uns else None
+        majority = obs.groupby("leiden", observed=True)["cell_type"].agg(lambda s: s.value_counts().index[0])
+        sizes = obs["leiden"].value_counts()
+        rows = ["| Cluster | Cells | Top marker genes | Cell type (majority vote) |", "|---|---|---|---|"]
+        for cl in sorted(majority.index, key=lambda c: int(c) if str(c).isdigit() else str(c)):
+            markers = ", ".join(str(names[str(cl)][i]) for i in range(_MARKERS_SHOWN)) if names is not None else "—"
+            rows.append(f"| {cl} | {_n(sizes[cl])} | {markers} | {majority[cl]} |")
+        out["clusters"] = "\n".join(rows)
+    if "cell_type" in obs:
+        counts = obs["cell_type"].value_counts()
+        rows = ["| Cell type | Cells | Share |", "|---|---|---|"]
+        rows += [f"| {name} | {_n(v)} | {_pct(v, adata.n_obs)} |" for name, v in counts.items()]
+        rows.append(f"| **Total** | **{_n(adata.n_obs)}** | |")
+        out["composition"] = "\n".join(rows)
+    steps = []
+    if e := _last(log, "inspect_dataset"):
+        steps.append(("Input", e["summary"]["n_cells"], e["summary"]["n_genes"]))
+    if e := _last(log, "filter_cells_and_genes"):
+        s = e["summary"]
+        steps.append((f"After QC filters (≤{_p(s['applied']['max_pct_mt'])} mito, ≥{_n(s['applied']['min_genes'])} genes/cell)",
+                      s["after"]["n_cells"], s["after"]["n_genes"]))
+    if e := _last(log, "filter_doublets"):
+        steps.append((f"After doublet removal (score < {_num(e['summary']['threshold'])})", e["summary"]["after_cells"], None))
+    if steps:
+        rows = ["| Step | Cells | Genes |", "|---|---|---|"]
+        genes = None
+        for name, cells, g in steps:
+            genes = g if g is not None else genes
+            rows.append(f"| {name} | {_n(cells)} | {_n(genes) if genes is not None else '—'} |")
+        out["steps"] = "\n".join(rows)
+    return out
+
+
+REQUIRED_TABLES = ("clusters", "composition")
+_PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+# A number standing on its own: not part of a gene or dataset name (CD14, MT-CO1, PBMC3k,
+# PC1, 10x). Percent signs and thousands separators are included in the match.
+_BARE_NUMBER = re.compile(r"(?<![\w\-.,+])\d+(?:[.,]\d+)*(?:\s?%)?(?![\w])")
+_CLUSTER_REF = re.compile(r"\bclusters?\s+(\d+(?:\s*(?:,|and|or|&|/)\s*\d+)*)", re.IGNORECASE)
+# Allowed forms that contain digits but are names, not values: the "median + 3×MAD" rule
+# and gene shorthand such as S100A8/9 (S100A8 and S100A9).
+_ALLOWED = re.compile(r"\b3\s*[×x*]\s*MAD\b|(?<=[A-Za-z])(\d+)(?:/\d+)+\b")
+_LINE_PREFIX = re.compile(r"^\s*(?:#{1,6}\s+\d+(?:\.\d+)*\.?|\d+\.)\s")  # "## 2. QC", "1. item"
+
+
+def _stray_numbers(markdown: str, cluster_ids: set[str]) -> tuple[list[str], list[str]]:
+    """Numbers the model typed itself, and cluster references to clusters that don't exist."""
+    stray, bad_clusters = [], []
+    for line in markdown.splitlines():
+        if line.lstrip().startswith("!["):
+            continue
+        text = _LINE_PREFIX.sub(" ", line)
+        text = _PLACEHOLDER.sub(" ", text)
+        text = _ALLOWED.sub(lambda m: m.group(1) or " ", text)
+
+        def _cluster(m: re.Match) -> str:
+            for cid in re.findall(r"\d+", m.group(1)):
+                if cid not in cluster_ids:
+                    bad_clusters.append(f"cluster {cid} does not exist (clusters: {', '.join(sorted(cluster_ids, key=int))})")
+            return " "
+
+        text = _CLUSTER_REF.sub(_cluster, text) if cluster_ids else text
+        for m in _BARE_NUMBER.finditer(text):
+            context = text[max(0, m.start() - 30) : m.end() + 15].strip()
+            stray.append(f"'{m.group(0)}' in \"...{context}...\"")
+    return list(dict.fromkeys(stray)), list(dict.fromkeys(bad_clusters))
+
+
+def render(markdown: str, log: list[Entry], adata) -> tuple[str, list[str]]:
+    """Fill every placeholder and check the narrative. Returns the rendered text and every
+    problem found (empty if the report is clean)."""
+    known, tabs = facts(log, adata), tables(log, adata)
+    cluster_ids = set(adata.obs["leiden"].astype(str)) if "leiden" in adata.obs else set()
+    problems: list[str] = []
+
+    for m in re.finditer(r"^#{1,6}\s+(.*)$", markdown, re.MULTILINE):
+        if re.search(r"\bmethods?\b", m.group(1), re.IGNORECASE):
+            problems.append(f"remove the '{m.group(1).strip()}' section: Methods is generated from the tool log "
+                            "and appended automatically. Explain analysis choices in the relevant results section.")
+
+    stray, bad_clusters = _stray_numbers(markdown, cluster_ids)
+    problems += [f"number typed directly, use a placeholder: {s}" for s in stray]
+    problems += bad_clusters
+
+    placed: set[str] = set()
+
+    def _fill(m: re.Match) -> str:
+        key = m.group(1)
+        kind, _, arg = key.partition(":")
+        value = None
+        if kind == "table" and arg in tabs:
+            placed.add(arg)
+            return f"\n\n{tabs[arg]}\n\n"
+        if not arg:
+            value = known.get(key)
+        elif kind == "celltype":
+            value = _celltypes(adata, [arg.strip()])
+        elif kind == "celltypes":
+            value = _celltypes(adata, [a.strip() for a in arg.split("|")])
+        if value is None:
+            problems.append(f"unknown placeholder {{{{{key}}}}}")
+            return f"⚠[unknown: {key}]"
+        return value
+
+    text = _PLACEHOLDER.sub(_fill, markdown)
+    # "{{celltype:X}} cells" would read "12 cells (3.0%) cells".
+    text = re.sub(r"(\d cells \([\d.]+%\))\s+cells\b", r"\1", text)
+    problems += [f"required table not placed: {{{{table:{t}}}}}" for t in REQUIRED_TABLES if t in tabs and t not in placed]
+    return text, problems
+
+
 # --- assembly ------------------------------------------------------------------
 
 
-def build_report(adata, narrative: str, batch_key: str | None) -> tuple[str, list[Figure]]:
-    """Assemble the final report from the agent's narrative and the code-built parts."""
+def build_report(adata, narrative: str, batch_key: str | None, warnings: list[str] = ()) -> tuple[str, list[Figure]]:
+    """Assemble the final report from the rendered narrative and the code-built parts.
+    `warnings` are checks the narrative still fails; they are shown at the top."""
     log = read_log(SESSION.paths.tool_log)
     figures = draw_figures(adata, log, batch_key, SESSION.paths.figures)
 
-    body, unplaced = place_figures(narrative.strip(), figures)
+    narrative = narrative.strip()
+    if not narrative.startswith("# "):
+        narrative = f"# Single-cell RNA-seq analysis: {SESSION.name}\n\n{narrative}"
+    body, unplaced = place_figures(narrative, figures)
+    if warnings:
+        note = "> **⚠ This report failed automatic checks and needs review:**\n" + "\n".join(f"> - {w}" for w in warnings)
+        body = _insert_after_intro(body, note, skip_overview=False)
     if table := decisions_table(log):
         body = _insert_after_intro(body, table)
     if summary := run_summary(log):

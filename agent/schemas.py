@@ -157,20 +157,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "summarize_findings",
         "description": "Consolidate the final analysis state (cell counts, cluster-to-"
         "cell-type mapping, top markers, cell-type counts) into one factual summary to write "
-        "the report from. Non-mutating.",
+        "the report from. Also returns 'facts' (placeholder names with their current values, "
+        "for {{name}} in the report) and the tables available as {{table:name}}. Non-mutating.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "generate_report",
-        "description": "Render UMAP and QC figures, write the annotated .h5ad, and assemble "
-        "the final Markdown report. Provide the report narrative as report_markdown; the tool "
-        "adds the figures. Call this last.",
+        "description": "Write the final Markdown report. Never type a number: use {{fact}}, "
+        "{{celltype:NAME}}, {{celltypes:A|B}} and {{table:name}} placeholders, which the tool "
+        "fills in. Any problem rejects the whole report with a list of all issues; fix them "
+        "all and resubmit. The tool adds the decisions table, captioned figures and Methods, "
+        "and writes the annotated .h5ad. Call this last.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "report_markdown": {
                     "type": "string",
-                    "description": "The full analysis report as Markdown, written by you from the findings.",
+                    "description": "The full analysis report as Markdown, written by you from "
+                    "the findings, with placeholders in place of every number.",
                 }
             },
             "required": ["report_markdown"],

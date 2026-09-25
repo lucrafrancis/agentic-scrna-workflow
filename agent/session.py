@@ -37,6 +37,8 @@ class Session:
         self.doublet_scores: np.ndarray | None = None
         # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
         self.n_duplicate_barcodes = 0
+        # generate_report rejections so far; after the limit the report is written with warnings.
+        self.report_attempts = 0
         self._step = 0
 
     def load(self, path) -> ad.AnnData:
@@ -66,6 +68,7 @@ class Session:
         for stale in [*self.paths.checkpoints.glob("*.h5ad"), *self.paths.figures.glob("*.png")]:
             stale.unlink()
         self._step = 0
+        self.report_attempts = 0
 
     def require_adata(self) -> ad.AnnData:
         if self.adata is None:

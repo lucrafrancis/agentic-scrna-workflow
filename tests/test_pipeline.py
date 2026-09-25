@@ -110,32 +110,10 @@ Done.
 """
 
 
-def test_report_built_from_tool_log(synthetic_h5ad):
-    """Calls go through the loop's dispatch and logging, as in a real run, so the report's
-    code-built parts (decisions table, figures, Methods) are derived from the log."""
-    from agent.loop import _log_tool_call, _run_tool
-
-    SESSION.load(synthetic_h5ad)
-    SESSION.begin_run()
-
-    def call(name, **args):
-        summary = _run_tool(name, args)
-        _log_tool_call(name, args, summary)
-        return summary
-
-    call("inspect_dataset")
-    call("check_gene_identifiers")
-    call("compute_qc")
-    call("recommend_qc_thresholds")
-    call("filter_cells_and_genes", min_genes=5, max_pct_mt=90, min_cells=1)
-    threshold = call("detect_doublets")["recommended_threshold"]
-    call("filter_doublets", threshold=threshold)
-    call("normalize", n_top_genes=50)
-    call("run_pca", n_comps=10)
-    call("cluster", resolution=1.0)
-    call("identify_markers", n_genes=5)
-    call("summarize_findings")
-    result = call("generate_report", report_markdown=NARRATIVE)
+def test_report_built_from_tool_log(logged_run):
+    """The report's code-built parts (decisions table, figures, Methods) come from the log."""
+    logged_run("summarize_findings")
+    result = logged_run("generate_report", report_markdown=NARRATIVE)
     assert "error" not in result, result
 
     text = SESSION.paths.report.read_text()
