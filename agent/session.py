@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import anndata as ad
+import numpy as np
+import pandas as pd
 
 from agent.config import RunPaths
 
@@ -28,6 +30,11 @@ class Session:
         self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
         # Set by normalize; read by annotate_celltypes (CellTypist expects 1e4 + log1p).
         self.normalize_target_sum: float | None = None
+        # Snapshots of cells that filtering removes, kept so the report's figures can show
+        # the full distribution each cutoff was chosen from. Set by filter_cells_and_genes
+        # (first call only) and detect_doublets.
+        self.qc_before_filter: pd.DataFrame | None = None
+        self.doublet_scores: np.ndarray | None = None
         # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
         self.n_duplicate_barcodes = 0
         self._step = 0
@@ -51,11 +58,12 @@ class Session:
         re-running a dataset would otherwise interleave two runs in one tool_calls.jsonl and
         leave run 1's checkpoints (e.g. 06_after_scvi.h5ad) sitting next to run 2's as if
         they were one sequence. The audit trail is a deliverable — it must describe exactly
-        one run. Figures, report and annotated .h5ad are simply overwritten in place.
+        one run. Old figures are cleared too, since the set drawn depends on the steps run; the
+        report and annotated .h5ad are simply overwritten in place.
         """
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.paths.tool_log.unlink(missing_ok=True)
-        for stale in self.paths.checkpoints.glob("*.h5ad"):
+        for stale in [*self.paths.checkpoints.glob("*.h5ad"), *self.paths.figures.glob("*.png")]:
             stale.unlink()
         self._step = 0
 

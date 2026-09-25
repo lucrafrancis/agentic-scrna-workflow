@@ -21,7 +21,7 @@ from scipy import sparse
 from scipy.signal import find_peaks
 from scipy.stats import gaussian_kde
 
-from agent import config
+from agent import config, report
 from agent.session import SESSION
 
 Summary = dict[str, Any]
@@ -204,6 +204,8 @@ def filter_cells_and_genes(min_genes: int = 200, max_pct_mt: float = 5.0, min_ce
         return {"error": "qc_not_computed", "message": "Call compute_qc before filtering."}
 
     before = {"n_cells": int(adata.n_obs), "n_genes": int(adata.n_vars)}
+    if SESSION.qc_before_filter is None:
+        SESSION.qc_before_filter = adata.obs[["n_genes_by_counts", "total_counts", "pct_counts_mt"]].copy()
     sc.pp.filter_cells(adata, min_genes=min_genes)
     adata = adata[adata.obs["pct_counts_mt"] <= max_pct_mt].copy()
     sc.pp.filter_genes(adata, min_cells=min_cells)
@@ -261,6 +263,7 @@ def detect_doublets() -> Summary:
     batch_key = _detect_batch_key(adata)
     sc.pp.scrublet(adata, batch_key=batch_key, random_state=config.SEED)
     scores = np.asarray(adata.obs["doublet_score"], dtype=float)
+    SESSION.doublet_scores = scores.copy()
 
     median = float(np.median(scores))
     mad = float(np.median(np.abs(scores - median)))  # raw (unscaled) MAD, per project spec
@@ -568,72 +571,19 @@ def summarize_findings() -> Summary:
 def generate_report(report_markdown: str) -> Summary:
     """Render figures, write the annotated .h5ad, and assemble outputs/report.md.
 
-    The agent supplies the narrative (report_markdown); this tool handles the deterministic
-    artifacts: UMAP + QC figures, the annotated deliverable, and stitching them into the
-    report. Returns the paths written.
+    The agent supplies the narrative (report_markdown); report.build_report adds the
+    deterministic parts (run summary, decisions table, captioned figures, Methods) from the
+    tool log. Returns the paths written.
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     adata = SESSION.require_adata()
     paths = SESSION.paths
-    paths.figures.mkdir(parents=True, exist_ok=True)
-    figures: list = []
-
-    if "X_umap" in adata.obsm:
-        colors = [c for c in ("cell_type", "leiden") if c in adata.obs]
-        # For multi-batch data, colouring by batch shows whether integration (scVI) mixed the
-        # batches (good) or left them as separate islands (not integrated).
-        batch_key = _detect_batch_key(adata)
-        if batch_key:
-            colors.append(batch_key)
-        sc.pl.umap(adata, color=colors, show=False, wspace=0.4)
-        path = paths.figures / "umap.png"
-        plt.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close()
-        figures.append(path)
-
-    # Marker dotplots: top 5 DEGs per group (expression + fraction expressing at a glance),
-    # one grouped by Leiden cluster and one by cell type. DEGs are computed into dedicated
-    # keys so the cluster-level markers from identify_markers (uns['rank_genes_groups']) stay
-    # intact.
-    def _marker_dotplot(groupby: str, key: str, filename: str) -> None:
-        sc.tl.rank_genes_groups(adata, groupby, method="wilcoxon", key_added=key)
-        sc.pl.rank_genes_groups_dotplot(
-            adata, n_genes=5, key=key, groupby=groupby, standard_scale="var", show=False
-        )
-        path = paths.figures / filename
-        plt.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close()
-        figures.append(path)
-
-    if "leiden" in adata.obs and adata.obs["leiden"].nunique() > 1:
-        _marker_dotplot("leiden", "dea_leiden", "marker_dotplot_clusters.png")
-    if "cell_type" in adata.obs and adata.obs["cell_type"].nunique() > 1:
-        _marker_dotplot("cell_type", "dea_cell_type", "marker_dotplot_celltype.png")
-
-    qc_cols = [c for c in ("n_genes_by_counts", "total_counts", "pct_counts_mt") if c in adata.obs]
-    if qc_cols:
-        sc.pl.violin(adata, qc_cols, multi_panel=True, show=False)
-        path = paths.figures / "qc_violin.png"
-        plt.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close()
-        figures.append(path)
-
+    text, figures = report.build_report(adata, report_markdown, _detect_batch_key(adata))
     adata.write_h5ad(paths.annotated)
-
-    figures_md = ""
-    if figures:
-        figures_md = "\n\n## Figures\n\n" + "\n\n".join(
-            f"![{p.stem}](figures/{p.name})" for p in figures
-        )
-    paths.report.write_text(report_markdown.rstrip() + figures_md + "\n")
+    paths.report.write_text(text)
 
     return {
         "report_path": str(paths.report),
-        "figures": [str(p) for p in figures],
+        "figures": [str(paths.figures / f.name) for f in figures],
         "annotated_h5ad": str(paths.annotated),
         "report_chars": len(report_markdown),
     }
