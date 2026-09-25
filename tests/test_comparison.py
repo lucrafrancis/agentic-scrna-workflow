@@ -118,6 +118,8 @@ def test_relabel_clusters(two_condition_h5ad):
     assert set(adata.obs["cell_type"]) == {"CD14+ monocytes", "Type B"}
     assert set(adata.obs["cell_type_celltypist"]) == {"Type A", "Type B"}
 
+    SESSION.paths.figures.mkdir(parents=True, exist_ok=True)
+    assert "relabelled by the agent" in report._composition_figure(adata, SESSION.paths.figures).caption
     table = report.tables([], adata)["clusters"]
     assert "| **CD14+ monocytes** | Type A |" in table
 

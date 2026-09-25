@@ -489,27 +489,85 @@ def cluster(resolution: float = 1.0) -> Summary:
     }
 
 
-def identify_markers(n_genes: int = 10) -> Summary:
-    """Rank marker genes per Leiden cluster (Wilcoxon) and return the top genes per cluster.
+def identify_markers(n_genes: int = 25) -> Summary:
+    """Rank marker genes per Leiden cluster (Wilcoxon, each cluster vs all other cells) and
+    return the top genes per cluster.
 
-    Reads the log-normalized X (preserved through PCA). Non-mutating (writes ranking to uns),
-    so it does not checkpoint. Guardrail: requires clustering first.
+    Every gene is ranked, not just the top n_genes, and the full table (rank, log2FC,
+    adjusted p, % of cells expressing in and outside the cluster) is kept on the session so
+    check_markers can look up any gene. Reads the log-normalized X (preserved through PCA).
+    Non-mutating (writes the ranking to uns), so it does not checkpoint. Guardrail: requires
+    clustering first.
     """
     adata = SESSION.require_adata()
     if "leiden" not in adata.obs:
         return {"error": "no_clusters", "message": "Run cluster before identify_markers."}
 
-    sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon")
+    sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", n_genes=adata.n_vars, pts=True)
+    table = sc.get.rank_genes_groups_df(adata, group=None)
+    if "group" not in table:  # a single cluster comes back without a group column
+        table.insert(0, "group", adata.obs["leiden"].astype(str).iloc[0])
+    table["group"] = table["group"].astype(str)
+    table["rank"] = table.groupby("group").cumcount() + 1
+    SESSION.marker_table = table.set_index(["group", "names"])
+
     names = adata.uns["rank_genes_groups"]["names"]
     groups = list(names.dtype.names)
     top = {g: [str(names[g][i]) for i in range(min(n_genes, len(names[g])))] for g in groups}
-
     return {
         "method": "wilcoxon",
         "n_clusters": len(groups),
         "n_genes_per_cluster": n_genes,
+        "n_genes_ranked": int(adata.n_vars),
         "top_markers_per_cluster": top,
+        "note": "Every gene is ranked; use check_markers to look up specific genes in any cluster.",
     }
+
+
+def check_markers(genes: list[str], clusters: list[str] | None = None) -> Summary:
+    """Marker statistics for specific genes in each cluster, from identify_markers' full
+    ranking: the gene's rank among all genes for that cluster, log2 fold change and adjusted
+    p (cluster vs all other cells), and the % of cells expressing it in and outside the
+    cluster. The % expressing is what shows a marker is absent. Non-mutating.
+
+    The p-values treat cells as independent, so they are far too small for inference; use
+    them to rank and describe markers, not as proof.
+    """
+    table = SESSION.marker_table
+    if table is None:
+        return {"error": "no_markers", "message": "Run identify_markers before check_markers."}
+    all_clusters = sorted(table.index.get_level_values("group").unique(), key=lambda c: int(c) if c.isdigit() else c)
+    clusters = [str(c) for c in (clusters or all_clusters)]
+    unknown_clusters = [c for c in clusters if c not in all_clusters]
+    if unknown_clusters:
+        return {"error": "bad_clusters", "message": f"Unknown clusters {unknown_clusters}. Clusters: {all_clusters}"}
+
+    n_ranked = int(table.loc[all_clusters[0]].shape[0])
+    genes_known = set(table.index.get_level_values("names"))
+    out: dict[str, dict] = {}
+    not_found = []
+    for gene in genes:
+        if gene not in genes_known:
+            not_found.append(gene)
+            continue
+        out[gene] = {}
+        for cl in clusters:
+            r = table.loc[(cl, gene)]
+            out[gene][cl] = {
+                "rank": f"{int(r['rank'])} of {n_ranked}",
+                "log2FC": round(float(r["logfoldchanges"]), 2),
+                "padj": float(f"{r['pvals_adj']:.2g}"),
+                "pct_in_cluster": round(100 * float(r["pct_nz_group"]), 1),
+                "pct_elsewhere": round(100 * float(r["pct_nz_reference"]), 1),
+            }
+    result: Summary = {
+        "genes": out,
+        "note": "Cluster vs all other cells (Wilcoxon). p-values treat cells as independent: use them to "
+        "rank and describe markers, not as proof. Low pct_in_cluster means the marker is absent.",
+    }
+    if not_found:
+        result["not_found"] = not_found
+    return result
 
 
 _FINE_MODEL, _COARSE_MODEL = "Immune_All_Low.pkl", "Immune_All_High.pkl"

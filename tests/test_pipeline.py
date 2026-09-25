@@ -137,3 +137,21 @@ def test_doublets_batch_key_can_be_chosen(batched_h5ad):
     SESSION.load(batched_h5ad)
     assert tools.detect_doublets(batch_key=None)["batch_key"] is None
     assert tools.detect_doublets(batch_key="nope")["error"] == "invalid_batch_key"
+
+
+def test_check_markers_reports_rank_stats_and_absence(logged_run):
+    """GENE0-29 are raised in population A only (see make_adata), so in A's cluster GENE0 ranks
+    near the top and is widely expressed, and in B's cluster it is not enriched."""
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    cluster_a = adata.obs.loc[a_cells, "leiden"].astype(str).value_counts().index[0]
+    cluster_b = adata.obs.loc[~a_cells, "leiden"].astype(str).value_counts().index[0]
+
+    result = tools.check_markers(["GENE0", "NOT_A_GENE"], clusters=[cluster_a, cluster_b])
+
+    a, b = result["genes"]["GENE0"][cluster_a], result["genes"]["GENE0"][cluster_b]
+    assert int(a["rank"].split(" of ")[0]) <= 30 and a["log2FC"] > 1 and a["pct_in_cluster"] > 90
+    assert b["log2FC"] < 0
+    assert result["not_found"] == ["NOT_A_GENE"]
+    assert tools.check_markers(["GENE0"], clusters=["99"])["error"] == "bad_clusters"
+    json.dumps(result)

@@ -44,6 +44,9 @@ class Session:
         self.composition: dict | None = None  # {"table", "proportions", "settings"}
         self.de_results: dict[str, pd.DataFrame] = {}  # cell type -> PyDESeq2 results
         self.de_settings: dict | None = None
+        # Set by identify_markers: every gene's marker statistics per cluster, indexed by
+        # (cluster, gene). Read by check_markers.
+        self.marker_table: pd.DataFrame | None = None
         # Set by relabel_clusters: each call's changes and stated reason, for the report.
         self.relabels: list[dict] = []
         # generate_report rejections so far; after the limit the report is written with warnings.

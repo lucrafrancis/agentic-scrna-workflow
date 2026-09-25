@@ -146,14 +146,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "identify_markers",
-        "description": "Rank marker genes per cluster (Wilcoxon) and return the top genes per "
-        "cluster, for interpreting cluster identity. Requires clustering first.",
+        "description": "Rank every gene as a marker for each cluster (Wilcoxon, cluster vs all "
+        "other cells) and return the top genes per cluster, for interpreting cluster identity. "
+        "The full ranking is kept for check_markers. Requires clustering first.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "n_genes": {"type": "integer", "description": "Top marker genes to return per cluster (default 10)."}
+                "n_genes": {"type": "integer", "description": "Top marker genes to return per cluster (default 25)."}
             },
             "required": [],
+        },
+    },
+    {
+        "name": "check_markers",
+        "description": "Look up specific genes in the full marker ranking: for each cluster, the "
+        "gene's rank among all genes, log2FC and padj vs all other cells, and % of cells "
+        "expressing it in and outside the cluster (low % = absent). Use it to confirm or rule "
+        "out canonical markers before accepting or changing a label. Requires identify_markers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "genes": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols, e.g. ['CD14', 'LYZ', 'CD68']."},
+                "clusters": {"type": "array", "items": {"type": "string"}, "description": "Clusters to report (default: all)."},
+            },
+            "required": ["genes"],
         },
     },
     {
@@ -315,6 +331,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "run_scvi": tools.run_scvi,
     "cluster": tools.cluster,
     "identify_markers": tools.identify_markers,
+    "check_markers": tools.check_markers,
     "annotate_celltypes": tools.annotate_celltypes,
     "relabel_clusters": tools.relabel_clusters,
     "compare_composition": tools.compare_composition,

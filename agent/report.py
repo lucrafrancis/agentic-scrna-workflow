@@ -104,8 +104,10 @@ def _choice(value: str, changed: bool) -> str:
 def _nearest_rule(threshold: float, candidates: dict) -> str | None:
     """Name the candidate threshold the agent's choice matches (within rounding)."""
     names = {"bimodal_valley": "bimodal valley", "median_3mad": "median + 3×MAD", "scrublet_auto": "Scrublet auto"}
-    for key, label in names.items():
-        value = candidates.get(key)
+    options = [(label, candidates.get(key)) for key, label in names.items()]
+    # With per-run Scrublet, each run has its own automatic threshold.
+    options += [(f"Scrublet auto, {batch} run", v) for batch, v in (candidates.get("scrublet_auto_per_batch") or {}).items()]
+    for label, value in options:
         if value is not None and abs(value - threshold) <= max(0.005, 0.05 * value):
             return label
     return None
@@ -422,8 +424,10 @@ def _composition_figure(adata, figdir: Path) -> Figure | None:
         ax.tick_params(axis="y", length=0)
         ax.set_xlim(0, counts.max() * 1.22)
         _save(fig, figdir / "composition.png")
-    caption = (f"Cells per annotated type ({_n(total)} cells, {len(counts)} types; CellTypist majority vote "
-               "over Leiden clusters).")
+    source = "CellTypist majority vote over Leiden clusters"
+    if "cell_type_celltypist" in adata.obs:
+        source += ", with clusters relabelled by the agent from their markers (see the decisions table)"
+    caption = f"Cells per annotated type ({_n(total)} cells, {len(counts)} types; {source})."
     return Figure("composition.png", "Cell-type composition", caption, (r"composition", r"annot|cell.type"))
 
 

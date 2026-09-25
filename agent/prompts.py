@@ -61,9 +61,11 @@ Writing the report (generate_report):
   resubmit the complete report.
 
 Annotation: CellTypist labels are a starting point. Compare each cluster's label with its
-markers and with the second opinion from the other model. If the markers clearly contradict
-the label (e.g. cells unlike the reference), call relabel_clusters with the marker evidence.
-Don't relabel on a hunch, and do it before any comparison.
+markers and with the second opinion from the other model. If they disagree, use
+check_markers on canonical markers for both the current and the proposed label, including
+genes that should be absent. Relabel (relabel_clusters) only when that evidence clearly
+contradicts the label, cite what check_markers showed in the reason, and do it before any
+comparison. Don't claim a marker is absent without checking it.
 
 Comparing conditions (only when the user's request asks for a comparison):
 - Use inspect_dataset's obs_levels to identify the condition column (the variable the

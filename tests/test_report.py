@@ -95,3 +95,10 @@ def test_report_gets_a_title_when_the_narrative_has_none(logged_run):
     text = SESSION.paths.report.read_text()
     assert text.startswith("# Single-cell RNA-seq analysis: synthetic\n")
     assert text.index("## Overview") < text.index("## Key analysis decisions")
+
+
+def test_doublet_rule_names_per_run_scrublet_thresholds():
+    candidates = {"median_3mad": 0.102, "scrublet_auto_per_batch": {"ctrl": 0.276, "stim": 0.648}}
+    assert report._nearest_rule(0.276, candidates) == "Scrublet auto, ctrl run"
+    assert report._nearest_rule(0.102, candidates) == "median + 3×MAD"
+    assert report._nearest_rule(0.2, candidates) is None
