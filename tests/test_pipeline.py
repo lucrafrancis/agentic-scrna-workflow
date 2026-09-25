@@ -130,3 +130,10 @@ def test_report_built_from_tool_log(logged_run):
     assert "figures/umap.png" in text[text.index("## Clustering") : text.index("## Conclusions")]
     for name in ("qc_thresholds.png", "doublet_scores.png", "umap.png"):
         assert (SESSION.paths.figures / name).exists()
+
+
+def test_doublets_batch_key_can_be_chosen(batched_h5ad):
+    """The agent can override the detected batch column, e.g. when donors shared one run."""
+    SESSION.load(batched_h5ad)
+    assert tools.detect_doublets(batch_key=None)["batch_key"] is None
+    assert tools.detect_doublets(batch_key="nope")["error"] == "invalid_batch_key"

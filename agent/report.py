@@ -191,6 +191,13 @@ def decisions_table(log: list[Entry]) -> str:
         rows.append(("Annotation model", "Immune_All_Low", "—", _choice(m.removesuffix(".pkl"), m != "Immune_All_Low.pkl"),
                      f"{ann['summary']['n_cell_types']} cell types"))
 
+    for e in log:
+        if e["tool"] == "relabel_clusters" and "error" not in e["summary"]:
+            changes = e["summary"]["changes"]
+            what = "; ".join(f"cluster {c['cluster']}: {c['from']} → **{c['to']}**" for c in changes)
+            n = sum(c["n_cells"] for c in changes)
+            rows.append(("Cluster labels", "CellTypist majority vote", e["args"]["reason"], what, f"{_n(n)} cells relabelled"))
+
     comp = _last(log, "compare_composition")
     if comp:
         a, sm = comp["args"], comp["summary"]
@@ -216,7 +223,8 @@ def decisions_table(log: list[Entry]) -> str:
         "## Key analysis decisions",
         "",
         "Each row compares a standard default with what the agent chose after reading the data. "
-        "Built from the tool log (`tool_calls.jsonl`), not written by the model.",
+        "Built from the tool log (`tool_calls.jsonl`), not written by the model"
+        + (", except the relabelling reasons, which quote the agent's tool call." if any(r[0] == "Cluster labels" for r in rows) else "."),
         "",
         "| Step | Standard default | What the data showed | Agent's choice | Effect |",
         "|---|---|---|---|---|",
@@ -670,6 +678,14 @@ def methods(log: list[Entry]) -> str:
             text += (f"Cell types were assigned with CellTypist (model `{ann['summary']['model']}`), using majority "
                      "voting over the Leiden clusters.")
         paras.append(text.strip())
+    relabels = [e for e in log if e["tool"] == "relabel_clusters" and "error" not in e["summary"]]
+    if relabels:
+        changes = [c for e in relabels for c in e["summary"]["changes"]]
+        paras.append(
+            "**Label curation.** Where marker genes contradicted CellTypist, the agent relabelled whole clusters "
+            f"({len(changes)} clusters; listed in the decisions table with the evidence). The original CellTypist "
+            "labels are kept in `obs['cell_type_celltypist']`."
+        )
     comp = _last(log, "compare_composition")
     if comp:
         a, sm = comp["args"], comp["summary"]
@@ -826,7 +842,11 @@ def facts(log: list[Entry], adata) -> dict[str, str]:
             f[f"{k}.{ref}"], f[f"{k}.{test}"] = _p(round(100 * r[f"mean_prop_{ref}"], 1)), _p(round(100 * r[f"mean_prop_{test}"], 1))
             f[f"{k}.log2_ratio"], f[f"{k}.padj"] = f"{r['log2_ratio']:.2f}", f"{r['padj']:.2g}"
             if r.get("n_samples_higher_in_test") is not None:
-                f[f"{k}.higher_in_{test}"] = f"{int(r['n_samples_higher_in_test'])} of {len(SESSION.composition['proportions'].xs(test, level=st['contrast'][0]))}"
+                # The value states its own meaning, so it can't be read the wrong way round.
+                n = len(SESSION.composition["proportions"].xs(test, level=st["contrast"][0]))
+                up = int(r["n_samples_higher_in_test"])
+                f[f"{k}.direction"] = (f"higher in {test} in {up} of {n} {st['sample_key']}s, "
+                                       f"lower or equal in {n - up}")
     if SESSION.de_settings is not None:
         st = SESSION.de_settings
         _, test, ref = st["contrast"]
@@ -865,10 +885,15 @@ def tables(log: list[Entry], adata) -> dict[str, str]:
         names = adata.uns["rank_genes_groups"]["names"] if "rank_genes_groups" in adata.uns else None
         majority = obs.groupby("leiden", observed=True)["cell_type"].agg(lambda s: s.value_counts().index[0])
         sizes = obs["leiden"].value_counts()
-        rows = ["| Cluster | Cells | Top marker genes | Cell type (majority vote) |", "|---|---|---|---|"]
+        curated = "cell_type_celltypist" in obs
+        rows = ["| Cluster | Cells | Top marker genes | Cell type |" + (" CellTypist label |" if curated else ""),
+                "|---|---|---|---|" + ("---|" if curated else "")]
+        original = (obs.groupby("leiden", observed=True)["cell_type_celltypist"].agg(lambda s: s.value_counts().index[0])
+                    if curated else None)
         for cl in sorted(majority.index, key=lambda c: int(c) if str(c).isdigit() else str(c)):
             markers = ", ".join(str(names[str(cl)][i]) for i in range(_MARKERS_SHOWN)) if names is not None else "—"
-            rows.append(f"| {cl} | {_n(sizes[cl])} | {markers} | {majority[cl]} |")
+            label = f"**{majority[cl]}**" if curated and majority[cl] != original[cl] else majority[cl]
+            rows.append(f"| {cl} | {_n(sizes[cl])} | {markers} | {label} |" + (f" {original[cl]} |" if curated else ""))
         out["clusters"] = "\n".join(rows)
     if "cell_type" in obs:
         counts = obs["cell_type"].value_counts()

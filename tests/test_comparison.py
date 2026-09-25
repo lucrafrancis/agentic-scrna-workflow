@@ -46,6 +46,10 @@ def test_compare_composition(two_condition_h5ad):
     assert set(result["results"]) == {"Type A", "Type B"}
     assert result["n_significant"] == 0  # composition is identical by construction
 
+    # Direction facts carry their own meaning (the model once read "0 of 8" the wrong way).
+    text, _ = report.render("# R\n\n## Composition\n{{comp.type_a.direction}}.", [], SESSION.adata)
+    assert "higher in stim in" in text and "donors, lower or equal in" in text
+
     # Guardrails: the condition can't be the replicate, and 2 donors is too few to test.
     assert tools.compare_composition(["condition", "stim", "ctrl"], sample_key="condition")["error"] == "bad_sample_key"
     SESSION.adata = SESSION.adata[SESSION.adata.obs["donor"].isin(["d0", "d1"])].copy()
@@ -95,3 +99,29 @@ def test_scvi_batch_key_list_is_validated(two_condition_h5ad):
     result = tools.run_scvi(batch_key=["donor", "no_such_column"])
     assert result["error"] == "invalid_batch_key"
     assert "no_such_column" in result["message"]
+
+
+def test_relabel_clusters(two_condition_h5ad):
+    """Whole clusters get a new label with a reason; the CellTypist label is kept, stale
+    comparison results are cleared, and the report shows both labels."""
+    SESSION.load(two_condition_h5ad)
+    SESSION.begin_run()
+    adata = SESSION.adata
+    adata.obs["leiden"] = pd.Categorical(np.where(adata.obs["cell_type"] == "Type A", "0", "1"))
+    tools.run_pseudobulk_de(["condition", "stim", "ctrl"], sample_key="donor", covariates=["donor"])
+
+    result = tools.relabel_clusters({"0": "CD14+ monocytes"}, reason="LYZ, CD14, S100A8 high")
+
+    assert "error" not in result, result
+    assert result["changes"] == [{"cluster": "0", "from": "Type A", "to": "CD14+ monocytes", "n_cells": 400}]
+    assert result["cleared"] == ["run_pseudobulk_de"] and not SESSION.de_results
+    assert set(adata.obs["cell_type"]) == {"CD14+ monocytes", "Type B"}
+    assert set(adata.obs["cell_type_celltypist"]) == {"Type A", "Type B"}
+
+    table = report.tables([], adata)["clusters"]
+    assert "| **CD14+ monocytes** | Type A |" in table
+
+    # Guardrails: unknown clusters, empty labels and missing reasons are refused.
+    assert tools.relabel_clusters({"9": "X"}, reason="markers")["error"] == "bad_labels"
+    assert tools.relabel_clusters({"1": " "}, reason="markers")["error"] == "bad_labels"
+    assert tools.relabel_clusters({"1": "X"}, reason=" ")["error"] == "no_reason"

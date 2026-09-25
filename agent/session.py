@@ -44,6 +44,8 @@ class Session:
         self.composition: dict | None = None  # {"table", "proportions", "settings"}
         self.de_results: dict[str, pd.DataFrame] = {}  # cell type -> PyDESeq2 results
         self.de_settings: dict | None = None
+        # Set by relabel_clusters: each call's changes and stated reason, for the report.
+        self.relabels: list[dict] = []
         # generate_report rejections so far; after the limit the report is written with warnings.
         self.report_attempts = 0
         self._step = 0
@@ -72,6 +74,7 @@ class Session:
         """
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.paths.tool_log.unlink(missing_ok=True)
+        self.paths.usage_log.unlink(missing_ok=True)
         for stale in [*self.paths.checkpoints.glob("*.h5ad"), *self.paths.figures.glob("*.png")]:
             stale.unlink()
         self._step = 0

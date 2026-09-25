@@ -59,8 +59,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "detect_doublets",
         "description": "Run Scrublet and report the doublet-score distribution plus candidate "
         "thresholds (bimodal valley, median+3*MAD, Scrublet automatic) and a recommendation. "
-        "Non-mutating. Inspect the distribution, then choose a threshold for filter_doublets.",
-        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "Non-mutating. Inspect the distribution, then choose a threshold for filter_doublets. "
+        "Scrublet runs separately within each 10x run: by default the detected batch column, "
+        "or name the column that marks runs, or null if all cells came from one run.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "batch_key": {
+                    "type": ["string", "null"],
+                    "description": "obs column marking separate 10x runs; omit for the detected batch "
+                    "column, null for a single run. Donors pooled into one run are not separate runs.",
+                },
+            },
+            "required": [],
+        },
     },
     {
         "name": "filter_doublets",
@@ -148,13 +160,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "annotate_celltypes",
         "description": "Annotate cell types with CellTypist (majority voting over Leiden "
         "clusters). Returns per-cluster cell-type labels and overall counts. Requires "
-        "clustering first. Default model suits immune/PBMC data.",
+        "clustering first. Default model (Immune_All_Low.pkl, fine subtypes) suits immune/PBMC "
+        "data; Immune_All_High.pkl gives broad types. The other model's per-cluster labels are "
+        "returned as a second opinion to check the chosen labels against.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "model": {"type": "string", "description": "CellTypist model (default Immune_All_Low.pkl)."}
+                "model": {"type": "string", "description": "CellTypist model: Immune_All_Low.pkl (fine, default) or Immune_All_High.pkl (coarse)."}
             },
             "required": [],
+        },
+    },
+    {
+        "name": "relabel_clusters",
+        "description": "Override CellTypist's label for whole Leiden clusters when the marker "
+        "genes contradict it (e.g. cells unlike the reference). Give the marker evidence as the "
+        "reason. The original labels are kept and the change is shown in the report. Clears "
+        "composition and DE results, which must then be rerun. Run after annotate_celltypes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "labels": {
+                    "type": "object", "additionalProperties": {"type": "string"},
+                    "description": "Cluster ID -> new cell-type label, e.g. {'0': 'CD14+ monocytes'}.",
+                },
+                "reason": {"type": "string", "description": "The marker evidence for the new labels."},
+            },
+            "required": ["labels", "reason"],
         },
     },
     {
@@ -284,6 +316,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "cluster": tools.cluster,
     "identify_markers": tools.identify_markers,
     "annotate_celltypes": tools.annotate_celltypes,
+    "relabel_clusters": tools.relabel_clusters,
     "compare_composition": tools.compare_composition,
     "run_pseudobulk_de": tools.run_pseudobulk_de,
     "get_top_genes": tools.get_top_genes,

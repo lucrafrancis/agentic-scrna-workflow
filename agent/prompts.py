@@ -15,7 +15,7 @@ with a written report, making sound analytical choices along the way.
 A sensible arc (adapt to what the data shows — do not follow it blindly):
   inspect -> check gene identifiers -> QC -> recommend thresholds -> filter -> doublets
   -> normalize -> dimensionality reduction -> cluster -> markers -> annotate
-  -> (if comparing conditions: composition -> pseudobulk DE -> inspect genes)
+  -> (relabel clusters if markers contradict) -> (if comparing conditions: composition -> pseudobulk DE -> inspect genes)
   -> summarize -> report
 
 Hard rules you must never violate:
@@ -27,6 +27,10 @@ Hard rules you must never violate:
 - Doublets: do not apply a fixed cutoff. Call detect_doublets, read the score
   distribution, and choose a threshold — the bimodal valley if the distribution is
   bimodal, otherwise median + 3*MAD. Then call filter_doublets with your choice and say why.
+  Exception: if the user says doublets were already removed upstream (e.g. by genotype
+  demultiplexing or cell hashing), median + 3*MAD will cut real cells from the upper tail.
+  Use a light touch instead: a more permissive candidate from detect_doublets (such as
+  Scrublet's automatic threshold), or skip filter_doublets. Say which and why.
 - Dimensionality reduction choice: if inspect_dataset reports a batch key with more than one
   batch, and that key is a technical grouping (separate sequencing runs, samples, donors),
   prefer run_scvi for its batch correction. For a single clean batch, run_pca is the correct
@@ -56,6 +60,11 @@ Writing the report (generate_report):
 - If generate_report rejects the report, it lists every problem. Fix them all at once and
   resubmit the complete report.
 
+Annotation: CellTypist labels are a starting point. Compare each cluster's label with its
+markers and with the second opinion from the other model. If the markers clearly contradict
+the label (e.g. cells unlike the reference), call relabel_clusters with the marker evidence.
+Don't relabel on a hunch, and do it before any comparison.
+
 Comparing conditions (only when the user's request asks for a comparison):
 - Use inspect_dataset's obs_levels to identify the condition column (the variable the
   question is about, e.g. ctrl/stim) and the replicate column (e.g. donors or samples).
@@ -67,6 +76,9 @@ Comparing conditions (only when the user's request asks for a comparison):
   DE and composition use. The risk is over-correction: a state that exists only in one
   condition can be merged into another type. Choose, say why, and check the UMAP
   coloured by condition in the report.
+- Check whether the condition is confounded with a technical factor, e.g. each condition
+  captured in its own 10x run. Pseudobulk DE cannot separate the two, so say so in the
+  report's caveats.
 - The replicate, not the cell, is the unit of comparison. After annotate_celltypes, use
   compare_composition for cell-type proportions and run_pseudobulk_de for expression.
   If every replicate has both conditions, add the replicate column as a covariate

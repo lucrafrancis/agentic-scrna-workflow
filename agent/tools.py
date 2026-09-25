@@ -253,7 +253,7 @@ def _valley_threshold(scores: np.ndarray) -> tuple[float | None, bool]:
     return float(grid[valley]), True
 
 
-def detect_doublets() -> Summary:
+def detect_doublets(batch_key: str | None = "auto") -> Summary:
     """Run Scrublet and report the score distribution plus candidate thresholds.
 
     Non-mutating: stores per-cell doublet scores in obs but removes nothing. The agent
@@ -261,9 +261,11 @@ def detect_doublets() -> Summary:
     the bimodal-valley cutoff when the distribution is bimodal, else median + 3*MAD.
 
     Guardrails: Scrublet models raw counts, so this refuses to run after normalize (scanpy
-    only warns on stderr, which the agent never sees). When the data has a batch key,
-    Scrublet runs per batch, so the simulated-doublet model is built within a single 10x
-    run rather than across pooled runs.
+    only warns on stderr, which the agent never sees). Scrublet runs per batch, so the
+    simulated-doublet model is built within a single 10x run rather than across pooled
+    runs. batch_key="auto" uses the detected batch column; the agent can instead name the
+    column that marks 10x runs (which may differ from donors when donors were pooled into
+    one run), or pass None.
     """
     adata = SESSION.require_adata()
     if "counts" in adata.layers or not _looks_like_counts(adata.X):
@@ -272,7 +274,12 @@ def detect_doublets() -> Summary:
             "message": "Scrublet needs raw counts; run detect_doublets before normalize.",
         }
 
-    batch_key = _detect_batch_key(adata)
+    # Scrublet should run within each physical 10x run. "auto" uses the detected batch
+    # column; the agent can name the column that marks runs, or None for one pooled run.
+    if batch_key == "auto":
+        batch_key = _detect_batch_key(adata)
+    elif batch_key is not None and batch_key not in adata.obs:
+        return {"error": "invalid_batch_key", "message": f"'{batch_key}' is not an obs column."}
     sc.pp.scrublet(adata, batch_key=batch_key, random_state=config.SEED)
     scores = np.asarray(adata.obs["doublet_score"], dtype=float)
     SESSION.doublet_scores = scores.copy()
@@ -505,7 +512,10 @@ def identify_markers(n_genes: int = 10) -> Summary:
     }
 
 
-def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
+_FINE_MODEL, _COARSE_MODEL = "Immune_All_Low.pkl", "Immune_All_High.pkl"
+
+
+def annotate_celltypes(model: str = _FINE_MODEL) -> Summary:
     """Annotate cell types with CellTypist (majority voting over Leiden clusters), then
     checkpoint.
 
@@ -514,7 +524,9 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
     (e.g. 1e6 / CPM), CellTypist would only warn and return degraded labels, so we rebuild
     its input from the stashed raw counts instead. Uses the Leiden clusters for majority
     voting so labels align with clustering. Guardrail: requires clustering first. The
-    resulting checkpoint is the annotated deliverable.
+    resulting checkpoint is the annotated deliverable. Also runs the other CellTypist immune
+    model (coarse if fine was chosen, and vice versa) and reports its per-cluster labels as a
+    second opinion, stored in obs['cell_type_alt'].
     """
     adata = SESSION.require_adata()
     if "leiden" not in adata.obs:
@@ -539,28 +551,92 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
     import celltypist
     from celltypist import models
 
-    models.download_models(model=[model], force_update=False)
-    predictions = celltypist.annotate(
-        ct_input, model=model, majority_voting=True, over_clustering="leiden"
-    )
-    labels = predictions.predicted_labels.loc[adata.obs_names, "majority_voting"].astype(str)
-    adata.obs["cell_type"] = labels
+    def _majority_labels(model_name: str) -> pd.Series:
+        models.download_models(model=[model_name], force_update=False)
+        predictions = celltypist.annotate(
+            ct_input, model=model_name, majority_voting=True, over_clustering="leiden"
+        )
+        return predictions.predicted_labels.loc[adata.obs_names, "majority_voting"].astype(str)
 
-    per_cluster = adata.obs.groupby("leiden", observed=True)["cell_type"].agg(
-        lambda s: s.value_counts().index[0]
-    )
+    def _per_cluster(column: str) -> dict[str, str]:
+        top = adata.obs.groupby("leiden", observed=True)[column].agg(lambda s: s.value_counts().index[0])
+        return {str(k): str(v) for k, v in top.items()}
+
+    adata.obs["cell_type"] = _majority_labels(model)
     counts = adata.obs["cell_type"].value_counts()
-
-    checkpoint = SESSION.checkpoint("after_annotate")
-    return {
+    out: Summary = {
         "model": model,
         "normalize_target_sum": target_sum,
         "rescaled_to_1e4_for_celltypist": rescaled,
         "n_cell_types": int(counts.shape[0]),
         "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
-        "per_cluster_majority": {str(k): str(v) for k, v in per_cluster.items()},
-        "checkpoint": checkpoint,
+        "per_cluster_majority": _per_cluster("cell_type"),
     }
+    # A second opinion at the other granularity: fine labels can be wrong for cells unlike the
+    # reference (e.g. cultured monocytes called macrophages), where the coarse label is right.
+    other = _COARSE_MODEL if model != _COARSE_MODEL else _FINE_MODEL
+    adata.obs["cell_type_alt"] = _majority_labels(other)
+    out["second_opinion"] = {
+        "model": other,
+        "per_cluster_majority": _per_cluster("cell_type_alt"),
+        "note": "Where the two models disagree beyond granularity, check the cluster's markers. To use "
+        f"the other model's labels, call annotate_celltypes(model='{other}').",
+    }
+    out["checkpoint"] = SESSION.checkpoint("after_annotate")
+    return out
+
+
+def relabel_clusters(labels: dict[str, str], reason: str) -> Summary:
+    """Override the cell-type label of whole Leiden clusters, with a stated reason.
+
+    For when marker genes contradict CellTypist (e.g. cells unlike its reference). The
+    original CellTypist labels are kept in obs['cell_type_celltypist'] and every relabelling
+    is recorded for the report. Composition and DE results computed with the old labels are
+    cleared, so they must be rerun. Guardrails: clusters must exist, labels must be
+    non-empty, and a reason is required.
+    """
+    adata = SESSION.require_adata()
+    if "cell_type" not in adata.obs or "leiden" not in adata.obs:
+        return {"error": "not_annotated", "message": "Run annotate_celltypes before relabel_clusters."}
+    if not reason.strip():
+        return {"error": "no_reason", "message": "Give the marker evidence for the new labels."}
+    clusters = set(adata.obs["leiden"].astype(str))
+    unknown = [c for c in labels if str(c) not in clusters]
+    empty = [c for c, v in labels.items() if not str(v).strip()]
+    if unknown or empty:
+        return {"error": "bad_labels", "message": f"Unknown clusters {unknown}; empty labels for {empty}. "
+                f"Clusters: {sorted(clusters, key=lambda c: int(c) if c.isdigit() else c)}"}
+
+    if "cell_type_celltypist" not in adata.obs:
+        adata.obs["cell_type_celltypist"] = adata.obs["cell_type"].astype(str)
+    leiden = adata.obs["leiden"].astype(str)
+    current = adata.obs["cell_type"].astype(str)
+    changes = []
+    for cluster, label in labels.items():
+        mask = leiden == str(cluster)
+        before = current[mask].value_counts().index[0]
+        current = current.where(~mask, label.strip())
+        changes.append({"cluster": str(cluster), "from": before, "to": label.strip(), "n_cells": int(mask.sum())})
+    adata.obs["cell_type"] = pd.Categorical(current)
+    SESSION.relabels.append({"changes": changes, "reason": reason.strip()})
+
+    cleared = []
+    if SESSION.composition is not None:
+        SESSION.composition = None
+        cleared.append("compare_composition")
+    if SESSION.de_results:
+        SESSION.de_results, SESSION.de_settings = {}, None
+        cleared.append("run_pseudobulk_de")
+    counts = adata.obs["cell_type"].value_counts()
+    out: Summary = {
+        "changes": changes,
+        "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
+        "checkpoint": SESSION.checkpoint("after_relabel"),
+    }
+    if cleared:
+        out["cleared"] = cleared
+        out["message"] = f"Results from {cleared} used the old labels and were cleared; rerun them."
+    return out
 
 
 # --- Comparing conditions -------------------------------------------------------
