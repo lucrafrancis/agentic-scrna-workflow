@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from agent import config
 from agent.session import SESSION
@@ -172,7 +173,9 @@ def decisions_table(log: list[Entry]) -> str:
         showed = f"{i['n_batches']} batches in `obs['{i['candidate_batch_key']}']`" if i.get("candidate_batch_key") else "no batch column"
         if dr["tool"] == "run_scvi":
             s = dr["summary"]
-            choice, result = "**scVI**", f"{s['n_latent']} latent dimensions, batch key '{s['batch_key']}'"
+            cols = s.get("batch_columns") or ([s["batch_key"]] if s["batch_key"] else [])
+            choice = f"**scVI**, correcting for {' × '.join(cols)}" if cols else "**scVI**, no batch correction"
+            result = f"{s['n_latent']} latent dimensions, {s.get('n_batches', '?')} batches"
         else:
             choice, result = "PCA", f"{dr['summary']['n_comps']} components"
         rows.append(("Embedding", "PCA", showed, choice, result))
@@ -187,6 +190,25 @@ def decisions_table(log: list[Entry]) -> str:
         m = ann["summary"]["model"]
         rows.append(("Annotation model", "Immune_All_Low", "—", _choice(m.removesuffix(".pkl"), m != "Immune_All_Low.pkl"),
                      f"{ann['summary']['n_cell_types']} cell types"))
+
+    comp = _last(log, "compare_composition")
+    if comp:
+        a, sm = comp["args"], comp["summary"]
+        rows.append(("Composition test", "—", f"{' / '.join(f'{v} {k}' for k, v in sm['n_samples'].items())} samples",
+                     f"{'paired ' if sm['paired'] else ''}{sm['test']} by '{a['sample_key']}'",
+                     f"{sm['n_significant']} of {len(sm['results'])} cell types changed (padj < 0.05)"))
+    de = _last(log, "run_pseudobulk_de")
+    if de:
+        a, sm = de["args"], de["summary"]
+        factor = a["contrast"][0]
+        paired = a["sample_key"] in (a.get("covariates") or [])
+        n_deg = sum(r["n_significant"] for r in sm["results"].values())
+        rows.append(("DE design", f"~ {factor}", f"replicates in '{a['sample_key']}'",
+                     f"**{sm['design'].replace('~', '~ ')}**" + (" (paired)" if paired else ""),
+                     f"{len(sm['results'])} cell types tested, {_n(n_deg)} significant genes in total"))
+        mc = a.get("min_cells", 10)
+        rows.append(("Min cells per pseudobulk sample", "10", "—", _choice(str(mc), mc != 10),
+                     f"{len(sm['skipped'])} cell types skipped" if sm["skipped"] else "no cell types skipped"))
 
     if not rows:
         return ""
@@ -259,28 +281,36 @@ def _qc_figure(log: list[Entry], figdir: Path) -> Figure | None:
     lost_default = int((mt > default["max_pct_mt"]).sum())
     lost_chosen = int((mt > applied["max_pct_mt"]).sum())
 
+    has_mito = bool(mt.max() > 0)
     with _style():
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.4))
-        a1.hist(mt, bins=60, color=DATA, edgecolor="white", linewidth=0.5)
-        a1.set(xlabel="Mitochondrial reads (%)", ylabel="Cells", title="Mitochondrial fraction")
-        if applied["max_pct_mt"] != default["max_pct_mt"]:
-            _cutoff(a1, default["max_pct_mt"], DEFAULT, f"default {_num(default['max_pct_mt'])}%\nremoves {_pct(lost_default, n)}", "--")
-        _cutoff(a1, applied["max_pct_mt"], CHOSEN, f"chosen {_num(applied['max_pct_mt'])}%\nremoves {_pct(lost_chosen, n)}")
+        if has_mito:
+            fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.4))
+            a1.hist(mt, bins=60, color=DATA, edgecolor="white", linewidth=0.5)
+            a1.set(xlabel="Mitochondrial reads (%)", ylabel="Cells", title="Mitochondrial fraction")
+            if applied["max_pct_mt"] != default["max_pct_mt"]:
+                _cutoff(a1, default["max_pct_mt"], DEFAULT, f"default {_num(default['max_pct_mt'])}%\nremoves {_pct(lost_default, n)}", "--")
+            _cutoff(a1, applied["max_pct_mt"], CHOSEN, f"chosen {_num(applied['max_pct_mt'])}%\nremoves {_pct(lost_chosen, n)}")
+        else:
+            fig, a2 = plt.subplots(figsize=(5.5, 3.4))
 
         a2.hist(genes, bins=60, color=DATA, edgecolor="white", linewidth=0.5)
         a2.set(xlabel="Genes detected per cell", ylabel="Cells", title="Genes per cell")
-        _cutoff(a2, applied["min_genes"], CHOSEN, f"floor {_num(applied['min_genes'])}")
+        lost_floor = int((genes < applied["min_genes"]).sum())
+        _cutoff(a2, applied["min_genes"], CHOSEN, f"floor {_num(applied['min_genes'])}\nremoves {_pct(lost_floor, n)}")
         _save(fig, figdir / "qc_thresholds.png")
 
-    if applied["max_pct_mt"] != default["max_pct_mt"]:
+    if not has_mito:
+        mito = "The data contains no mitochondrial reads (no mitochondrial genes), so the mitochondrial filter removes nothing."
+    elif applied["max_pct_mt"] != default["max_pct_mt"]:
         mito = (f"The standard {_num(default['max_pct_mt'])}% mitochondrial cutoff (dashed) would remove "
                 f"{_n(lost_default)} cells ({_pct(lost_default, n)}); the chosen {_num(applied['max_pct_mt'])}% cutoff "
                 f"removes {_n(lost_chosen)} ({_pct(lost_chosen, n)}).")
     else:
         mito = (f"The standard {_num(default['max_pct_mt'])}% mitochondrial cutoff was kept and removes "
                 f"{_n(lost_chosen)} cells ({_pct(lost_chosen, n)}).")
-    caption = (f"Per-cell QC before filtering ({_n(n)} cells, median {_num(np.median(mt))}% mitochondrial). "
-               f"{mito} Minimum genes per cell: {_num(applied['min_genes'])} (fewest observed: {_n(genes.min())}).")
+    median_mt = f", median {_num(np.median(mt))}% mitochondrial" if has_mito else ""
+    caption = (f"Per-cell QC before filtering ({_n(n)} cells{median_mt}). {mito} Minimum genes per cell: "
+               f"{_num(applied['min_genes'])}, which removes {_n(lost_floor)} cells (fewest observed: {_n(genes.min())}).")
     return Figure("qc_thresholds.png", "QC distributions with cutoffs", caption, (r"quality|\bqc\b", r"filter"))
 
 
@@ -321,6 +351,13 @@ def _doublet_figure(log: list[Entry], figdir: Path) -> Figure | None:
     return Figure("doublet_scores.png", "Doublet score distribution", caption, (r"doublet",))
 
 
+def _condition_column() -> str | None:
+    for settings in (SESSION.de_settings, (SESSION.composition or {}).get("settings")):
+        if settings:
+            return settings["contrast"][0]
+    return None
+
+
 def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
     import matplotlib.pyplot as plt
     import scanpy as sc
@@ -328,21 +365,34 @@ def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
     if "X_umap" not in adata.obsm:
         return None
     colors = [c for c in ("cell_type", "leiden") if c in adata.obs]
+    titles = {"cell_type": "Cell type", "leiden": "Leiden cluster"}
     # For multi-batch data, colouring by batch shows whether integration mixed the batches
     # (good) or left them as separate islands (not integrated).
     if batch_key and batch_key in adata.obs:
         colors.append(batch_key)
-    titles = {"cell_type": "Cell type", "leiden": "Leiden cluster", batch_key: "Batch"}
+        titles[batch_key] = f"Batch ({batch_key})"
+    # When conditions were compared, colouring by condition shows whether cell types line up
+    # across conditions, or whether a type splits (or a state exists) in one condition only.
+    condition = _condition_column()
+    if condition and condition in adata.obs and condition not in colors:
+        colors.append(condition)
+        titles[condition] = f"Condition ({condition})"
     with _style():
         sc.pl.umap(adata, color=colors, title=[titles[c] for c in colors], show=False, wspace=0.45,
-                   frameon=False, legend_fontsize=8)
+                   frameon=False, legend_fontsize=8, ncols=2 if len(colors) > 3 else 4)
         _save(plt.gcf(), figdir / "umap.png")
     rep = {"X_scVI": "the scVI latent space", "X_pca": "PCA"}.get(SESSION.representation, SESSION.representation)
     names = [titles[c] if c == "leiden" else titles[c].lower() for c in colors]
     by = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     caption = f"UMAP of {_n(adata.n_obs)} cells computed on {rep}, coloured by {by}."
+    corrected = SESSION.scvi_batch_columns
+    if corrected:
+        caption += f" scVI corrected for {' × '.join(corrected)}."
     if batch_key in colors:
         caption += " Batches that overlap within each cell type indicate the integration worked."
+    if condition in colors:
+        caption += (" Conditions that overlap within each cell type mean the labels are comparable "
+                    "between conditions; a region with only one condition may be a condition-specific state.")
     return Figure("umap.png", "UMAP", caption, (r"cluster", r"dimension|embedding|integration|umap"))
 
 
@@ -388,6 +438,96 @@ def _dotplot_figure(adata, groupby: str, figdir: Path) -> Figure | None:
     return Figure(name, f"Marker genes per {what}", caption, (r"marker", r"annot|cell.type"))
 
 
+def _slug(name: str) -> str:
+    """Cell-type name as a placeholder key: 'CD14+ Monocytes' -> 'cd14_monocytes'."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+REF_COLOR, TEST_COLOR = "#2a78d6", "#eb6834"
+
+
+def _composition_change_figure(figdir: Path) -> Figure | None:
+    import matplotlib.pyplot as plt
+
+    comp = SESSION.composition
+    if comp is None:
+        return None
+    props, table, st = comp["proportions"], comp["table"], comp["settings"]
+    factor, test, ref = st["contrast"]
+    order = table.sort_values(f"mean_prop_{ref}", ascending=False).index.tolist()
+    by = {lvl: props.xs(lvl, level=factor) for lvl in (ref, test)}
+
+    with _style():
+        fig, ax = plt.subplots(figsize=(max(6, 0.75 * len(order) + 1.5), 4))
+        for i, ct in enumerate(order):
+            r, t = 100 * by[ref][ct], 100 * by[test][ct]
+            if st["paired"]:
+                shared = r.index.intersection(t.index)
+                for sample in shared:
+                    ax.plot([i - 0.18, i + 0.18], [r[sample], t[sample]], color="#c3c2b7", linewidth=0.8, zorder=1)
+            ax.scatter(np.full(len(r), i - 0.18), r, s=22, color=REF_COLOR, zorder=2, label=ref if i == 0 else None)
+            ax.scatter(np.full(len(t), i + 0.18), t, s=22, color=TEST_COLOR, zorder=2, label=test if i == 0 else None)
+            padj = table.loc[ct, "padj"]
+            if padj < 0.05:
+                ax.annotate(f"padj {padj:.2g}", xy=(i, 1), xycoords=("data", "axes fraction"), ha="center",
+                            va="top", fontsize=8, color=INK, fontweight="bold")
+        # Symmetric log: log-like for the wide range of shares, but a sample with none of a
+        # type (0%) still has a place on the axis.
+        ax.set_yscale("symlog", linthresh=0.1)
+        ax.set_ylim(bottom=0)
+        ax.set_xticks(range(len(order)), order, rotation=40, ha="right")
+        ax.set(ylabel="Cells in sample (%)", title=f"Cell-type proportions per {st['sample_key']}: {test} vs {ref}")
+        ax.legend(loc="lower left", fontsize=8)
+        _save(fig, figdir / "composition_change.png")
+
+    n_sig = int((table["padj"] < 0.05).sum())
+    design = f"lines join each {st['sample_key']}'s two samples" if st["paired"] else "samples are unpaired"
+    caption = (f"Share of each cell type per sample, {ref} (blue) vs {test} (orange); {design}. "
+               f"{st['test']} test with Benjamini-Hochberg correction: {n_sig} of {len(table)} cell types differ "
+               "at padj < 0.05. Log scale above 0.1%, linear below, so samples with none of a type sit at 0.")
+    return Figure("composition_change.png", "Cell-type proportions by condition", caption,
+                  (r"abundance|proportion|composition (change|analysis|test|shift)", r"composition"))
+
+
+def _volcano_figure(figdir: Path) -> Figure | None:
+    import matplotlib.pyplot as plt
+
+    results, st = SESSION.de_results, SESSION.de_settings
+    if not results or st is None:
+        return None
+    cts = list(results)
+    ncol = min(4, len(cts))
+    nrow = int(np.ceil(len(cts) / ncol))
+    with _style():
+        fig, axes = plt.subplots(nrow, ncol, figsize=(3.2 * ncol, 3.0 * nrow), squeeze=False)
+        for ax, ct in zip(axes.flat, cts):
+            res = results[ct].dropna(subset=["padj"])
+            y = -np.log10(res["padj"].clip(lower=1e-300))
+            up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
+            down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
+            ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=3, color=DATA, rasterized=True)
+            ax.scatter(res["log2FoldChange"][down], y[down], s=4, color=REF_COLOR, rasterized=True)
+            ax.scatter(res["log2FoldChange"][up], y[up], s=4, color=TEST_COLOR, rasterized=True)
+            for k, gene in enumerate(res[up].sort_values("padj").index[:3]):
+                # Staggered offsets keep labels of near-identical points apart.
+                ax.annotate(gene, (res.loc[gene, "log2FoldChange"], y[gene]), fontsize=7, color=INK,
+                            xytext=(4, -9 * k), textcoords="offset points")
+            ax.set_title(f"{ct}\n{int(up.sum())} up, {int(down.sum())} down", fontsize=9)
+            ax.set_xlabel("log2 fold change", fontsize=8)
+            ax.set_ylabel("-log10 padj", fontsize=8)
+        for ax in list(axes.flat)[len(cts):]:
+            ax.axis("off")
+        fig.tight_layout()
+        _save(fig, figdir / "de_volcano.png")
+    factor, test, ref = st["contrast"]
+    caption = (f"Pseudobulk differential expression, {test} vs {ref}, per cell type (PyDESeq2, design "
+               f"`{st['design']}`, Wald test). Orange: up in {test}; blue: down (padj < 0.05). The three most "
+               "significant up-regulated genes are labelled.")
+    if st["skipped"]:
+        caption += " Not tested (too few samples): " + ", ".join(st["skipped"]) + "."
+    return Figure("de_volcano.png", "Volcano plots per cell type", caption, (r"differential|\bde\b|expression",))
+
+
 def draw_figures(adata, log: list[Entry], batch_key: str | None, figdir: Path) -> list[Figure]:
     import matplotlib
 
@@ -400,6 +540,8 @@ def draw_figures(adata, log: list[Entry], batch_key: str | None, figdir: Path) -
         _dotplot_figure(adata, "leiden", figdir),
         _composition_figure(adata, figdir),
         _dotplot_figure(adata, "cell_type", figdir),
+        _composition_change_figure(figdir),
+        _volcano_figure(figdir),
     ]
     return [f for f in figures if f]
 
@@ -459,6 +601,11 @@ def _insert_after_intro(markdown: str, block: str, skip_overview: bool = True) -
 # --- methods -------------------------------------------------------------------
 
 
+def _scvi_correction(summary: dict) -> str:
+    cols = summary.get("batch_columns") or ([summary["batch_key"]] if summary.get("batch_key") else [])
+    return f"correcting for {' × '.join(cols)}" if cols else "without batch correction"
+
+
 def methods(log: list[Entry]) -> str:
     paras = []
     ids = _last(log, "check_gene_identifiers")
@@ -501,8 +648,9 @@ def methods(log: list[Entry]) -> str:
         s = dr["summary"]
         paras.append(
             f"**Embedding.** An scVI model ({s['n_latent']} latent dimensions, {s['epochs_trained']} epochs) was "
-            f"trained on raw counts of {_n(s['n_hvgs_used'])} highly variable genes with batch key "
-            f"'{s['batch_key']}'; its latent space was used downstream."
+            f"trained on raw counts of {_n(s['n_hvgs_used'])} highly variable genes, "
+            f"{_scvi_correction(s)}; its latent space was used for clustering, "
+            "UMAP and annotation (raw counts were unchanged)."
         )
     elif dr:
         paras.append(f"**Embedding.** PCA ({dr['summary']['n_comps']} components) on the highly variable genes.")
@@ -522,6 +670,26 @@ def methods(log: list[Entry]) -> str:
             text += (f"Cell types were assigned with CellTypist (model `{ann['summary']['model']}`), using majority "
                      "voting over the Leiden clusters.")
         paras.append(text.strip())
+    comp = _last(log, "compare_composition")
+    if comp:
+        a, sm = comp["args"], comp["summary"]
+        paras.append(
+            f"**Composition.** For each sample ('{a['sample_key']}' × condition), the share of cells of each type "
+            f"('{a.get('celltype_key', 'cell_type')}') was computed and compared between {a['contrast'][1]} and "
+            f"{a['contrast'][2]} with a {'paired ' if sm['paired'] else ''}{sm['test']} test; p-values were adjusted "
+            "across cell types with the Benjamini-Hochberg method."
+        )
+    de = _last(log, "run_pseudobulk_de")
+    if de:
+        a, sm = de["args"], de["summary"]
+        paras.append(
+            f"**Differential expression.** Raw counts were summed per sample ('{a['sample_key']}' × condition) "
+            f"within each cell type ('{a.get('celltype_key', 'cell_type')}'); samples with fewer than "
+            f"{a.get('min_cells', 10)} cells were dropped, and genes were kept with at least 10 counts in at least as "
+            f"many samples as the smaller condition. PyDESeq2 was fitted with design `{sm['design']}` and "
+            f"{a['contrast'][1]} was compared with {a['contrast'][2]} using a Wald test; p-values were adjusted with "
+            "Benjamini-Hochberg (padj < 0.05 called significant). Log2 fold changes are unshrunken."
+        )
     if not paras:
         return ""
 
@@ -530,6 +698,10 @@ def methods(log: list[Entry]) -> str:
         packages.append("scvi-tools")
     if ann:
         packages.append("celltypist")
+    if comp:
+        packages.append("statsmodels")
+    if de:
+        packages.append("pydeseq2")
     rows = [("Python", platform.python_version())] + [(p, _version(p)) for p in packages]
     rows.append(("LLM (analysis decisions and narrative)", config.MODEL))
     software = "\n".join(["| Software | Version |", "|---|---|"] + [f"| {a} | {b} |" for a, b in rows])
@@ -640,6 +812,35 @@ def facts(log: list[Entry], adata) -> dict[str, str]:
     if "cell_type" in adata.obs:
         f["celltype.n"] = str(adata.obs["cell_type"].nunique())
     if e := _last(log, "inspect_dataset"):
+        for col, levels in e["summary"].get("obs_levels", {}).items():
+            if col.isidentifier():
+                f[f"input.n_{col}"] = str(len(levels))
+    if SESSION.composition is not None:
+        comp, st = SESSION.composition["table"], SESSION.composition["settings"]
+        _, test, ref = st["contrast"]
+        f["comp.test"] = ("paired " if st["paired"] else "") + st["test"]
+        f["comp.n_significant"] = str(int((comp["padj"] < 0.05).sum()))
+        f["comp.n_cell_types"] = str(len(comp))
+        for ct, r in comp.iterrows():
+            k = f"comp.{_slug(ct)}"
+            f[f"{k}.{ref}"], f[f"{k}.{test}"] = _p(round(100 * r[f"mean_prop_{ref}"], 1)), _p(round(100 * r[f"mean_prop_{test}"], 1))
+            f[f"{k}.log2_ratio"], f[f"{k}.padj"] = f"{r['log2_ratio']:.2f}", f"{r['padj']:.2g}"
+            if r.get("n_samples_higher_in_test") is not None:
+                f[f"{k}.higher_in_{test}"] = f"{int(r['n_samples_higher_in_test'])} of {len(SESSION.composition['proportions'].xs(test, level=st['contrast'][0]))}"
+    if SESSION.de_settings is not None:
+        st = SESSION.de_settings
+        _, test, ref = st["contrast"]
+        f["de.design"], f["de.contrast"] = f"`{st['design']}`", f"{test} vs {ref}"
+        f["de.padj_threshold"], f["de.min_cells"] = "0.05", str(st["min_cells"])
+        f["de.n_cell_types_tested"] = str(len(SESSION.de_results))
+        f["de.skipped"] = ", ".join(st["skipped"]) or "none"
+        for ct, res in SESSION.de_results.items():
+            k = f"de.{_slug(ct)}"
+            sig = res[res["padj"] < 0.05]
+            f[f"{k}.genes_tested"] = _n(res["padj"].notna().sum())
+            f[f"{k}.n_significant"] = _n(len(sig))
+            f[f"{k}.n_up"], f[f"{k}.n_down"] = _n((sig["log2FoldChange"] > 0).sum()), _n((sig["log2FoldChange"] < 0).sum())
+    if e := _last(log, "inspect_dataset"):
         total = e["summary"]["n_cells"]
         f["final.n_cells"], f["final.n_genes"] = _n(adata.n_obs), _n(adata.n_vars)
         f["final.cells_removed"] = _n(total - adata.n_obs)
@@ -691,10 +892,49 @@ def tables(log: list[Entry], adata) -> dict[str, str]:
             genes = g if g is not None else genes
             rows.append(f"| {name} | {_n(cells)} | {_n(genes) if genes is not None else '—'} |")
         out["steps"] = "\n".join(rows)
+    out.update(_comparison_tables())
     return out
 
 
-REQUIRED_TABLES = ("clusters", "composition")
+def _gene(arg: str) -> str | None:
+    """{{gene:CELLTYPE:SYMBOL}} -> 'ISG15 (log2FC 7.66, padj 4.8e-73)'. CELLTYPE is the name or its slug."""
+    ct, _, gene = arg.rpartition(":")
+    ct = next((c for c in SESSION.de_results if ct.strip() in (c, _slug(c))), None)
+    if ct is None:
+        return None
+    res = SESSION.de_results[ct]
+    gene = gene.strip()
+    if gene not in res.index or pd.isna(res.loc[gene, "padj"]):
+        return None
+    r = res.loc[gene]
+    return f"{gene} (log2FC {r['log2FoldChange']:.2f}, padj {r['padj']:.2g})"
+
+
+def _comparison_tables() -> dict[str, str]:
+    out = {}
+    if SESSION.composition is not None:
+        comp, st = SESSION.composition["table"], SESSION.composition["settings"]
+        _, test, ref = st["contrast"]
+        rows = [f"| Cell type | Mean share, {ref} | Mean share, {test} | log2 ratio | padj |", "|---|---|---|---|---|"]
+        rows += [f"| {ct} | {100 * r[f'mean_prop_{ref}']:.1f}% | {100 * r[f'mean_prop_{test}']:.1f}% | "
+                 f"{r['log2_ratio']:.2f} | {r['padj']:.2g} |" for ct, r in comp.iterrows()]
+        out["composition_test"] = "\n".join(rows)
+    if SESSION.de_results:
+        st = SESSION.de_settings
+        rows = ["| Cell type | Samples (test / ref) | Genes tested | Up | Down | Top up-regulated genes |", "|---|---|---|---|---|---|"]
+        _, test, ref = st["contrast"]
+        for ct, res in SESSION.de_results.items():
+            sig = res[res["padj"] < 0.05]
+            up = sig[sig["log2FoldChange"] > 0].sort_values("padj").index[:5]
+            meta = SESSION.de_results[ct].attrs.get("n_samples", {})
+            samples = f"{meta.get(test, '?')} / {meta.get(ref, '?')}"
+            rows.append(f"| {ct} | {samples} | {_n(res['padj'].notna().sum())} | {_n((sig['log2FoldChange'] > 0).sum())} | "
+                        f"{_n((sig['log2FoldChange'] < 0).sum())} | {', '.join(up)} |")
+        out["de_summary"] = "\n".join(rows)
+    return out
+
+
+REQUIRED_TABLES = ("clusters", "composition", "composition_test", "de_summary")
 _PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 # A number standing on its own: not part of a gene or dataset name (CD14, MT-CO1, PBMC3k,
 # PC1, 10x). Percent signs and thousands separators are included in the match.
@@ -760,6 +1000,8 @@ def render(markdown: str, log: list[Entry], adata) -> tuple[str, list[str]]:
             value = _celltypes(adata, [arg.strip()])
         elif kind == "celltypes":
             value = _celltypes(adata, [a.strip() for a in arg.split("|")])
+        elif kind == "gene":
+            value = _gene(arg)
         if value is None:
             problems.append(f"unknown placeholder {{{{{key}}}}}")
             return f"⚠[unknown: {key}]"

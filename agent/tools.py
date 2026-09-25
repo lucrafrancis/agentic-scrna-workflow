@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import scanpy as sc
 from scipy import sparse
 from scipy.signal import find_peaks
@@ -30,6 +31,9 @@ Summary = dict[str, Any]
 # inspect_dataset. Deliberately excludes experimental-design columns such as `condition` or
 # `treatment`: correcting those away would remove the biology the analysis is about.
 _BATCH_HINTS = {"batch", "sample", "donor", "patient", "subject", "dataset"}
+
+# inspect_dataset lists the values of obs columns with at most this many distinct values.
+_MAX_LEVELS_SHOWN = 20
 
 # Quantiles reported for every QC metric distribution.
 _QUANTILES = {"min": 0.0, "p25": 0.25, "median": 0.5, "p75": 0.75, "p95": 0.95, "p99": 0.99, "max": 1.0}
@@ -76,6 +80,14 @@ def inspect_dataset() -> Summary:
         "n_cells": int(adata.n_obs),
         "n_genes": int(adata.n_vars),
         "obs_columns": obs_cols,
+        # Levels of the low-cardinality columns, so the agent can tell a condition to keep
+        # (e.g. ctrl/stim) from a replicate or batch grouping (e.g. donors).
+        "obs_levels": {
+            c: sorted(map(str, adata.obs[c].unique()))
+            for c in obs_cols
+            if adata.obs[c].nunique() <= _MAX_LEVELS_SHOWN
+            and not pd.api.types.is_float_dtype(adata.obs[c])
+        },
         "var_columns": list(adata.var.columns),
         "candidate_batch_key": candidate_batch_key,
         "n_batches": n_batches,
@@ -387,18 +399,27 @@ def run_pca(n_comps: int = 50) -> Summary:
     }
 
 
-def run_scvi(batch_key: str | None = None, max_epochs: int | None = None) -> Summary:
+def run_scvi(batch_key: str | list[str] | None = None, max_epochs: int | None = None) -> Summary:
     """scVI latent from raw counts (layers['counts'], HVGs), then checkpoint.
 
     Guardrail: requires layers['counts'] (stashed by normalize) — scVI models counts, not
     log-normalized data. Trains on the HVG subset. Prefer PCA for a single clean batch;
-    scVI's value is batch correction when batch_key spans multiple batches.
+    scVI's value is batch correction when batch_key spans multiple batches. A list of
+    columns is combined into one batch per combination (e.g. ['donor', 'condition'] gives
+    one batch per sample), stored as obs['scvi_batch'].
     """
     adata = SESSION.require_adata()
     if "counts" not in adata.layers:
         return {"error": "no_raw_counts", "message": "scVI needs raw counts; call normalize first."}
-    if batch_key is not None and batch_key not in adata.obs:
-        return {"error": "invalid_batch_key", "message": f"'{batch_key}' is not an obs column."}
+    keys = [batch_key] if isinstance(batch_key, str) else list(batch_key or [])
+    missing = [k for k in keys if k not in adata.obs]
+    if missing:
+        return {"error": "invalid_batch_key", "message": f"Not obs columns: {missing}."}
+    if len(keys) > 1:
+        adata.obs["scvi_batch"] = pd.Categorical(adata.obs[keys].astype(str).agg("_".join, axis=1))
+        batch_key = "scvi_batch"
+    elif keys:
+        batch_key = keys[0]
 
     import scvi  # heavy (torch); import lazily so the rest of the toolset stays light
 
@@ -411,6 +432,7 @@ def run_scvi(batch_key: str | None = None, max_epochs: int | None = None) -> Sum
 
     adata.obsm["X_scVI"] = model.get_latent_representation()
     SESSION.representation = "X_scVI"
+    SESSION.scvi_batch_columns = keys
     try:
         epochs_trained = len(next(iter(model.history.values())))
     except (StopIteration, AttributeError):
@@ -421,6 +443,8 @@ def run_scvi(batch_key: str | None = None, max_epochs: int | None = None) -> Sum
         "representation": "X_scVI",
         "n_latent": int(adata.obsm["X_scVI"].shape[1]),
         "batch_key": batch_key,
+        "batch_columns": keys,
+        "n_batches": int(adata.obs[batch_key].nunique()) if batch_key else 1,
         "n_hvgs_used": int(train.n_vars),
         "epochs_trained": epochs_trained,
         "checkpoint": checkpoint,
@@ -537,6 +561,290 @@ def annotate_celltypes(model: str = "Immune_All_Low.pkl") -> Summary:
         "per_cluster_majority": {str(k): str(v) for k, v in per_cluster.items()},
         "checkpoint": checkpoint,
     }
+
+
+# --- Comparing conditions -------------------------------------------------------
+#
+# Both tools compare a condition (e.g. ctrl vs stim) across biological replicates (e.g.
+# donors). The unit of replication is the sample, never the cell: cells from one donor are
+# not independent, so testing cells directly overstates significance.
+
+_DE_PADJ = 0.05  # significance threshold for DE counts, top-gene lists and figures
+
+
+def _check_columns(adata, columns: list[str]) -> Summary | None:
+    missing = [c for c in columns if c not in adata.obs]
+    if missing:
+        return {"error": "bad_column", "message": f"Not obs columns: {missing}. Columns: {list(adata.obs.columns)}"}
+    return None
+
+
+def _check_contrast(adata, contrast: list[str]) -> Summary | None:
+    if len(contrast) != 3:
+        return {"error": "bad_contrast", "message": "Contrast must be [factor, test, reference]."}
+    factor, test, ref = contrast
+    if err := _check_columns(adata, [factor]):
+        return err
+    levels = sorted(map(str, adata.obs[factor].unique()))
+    for level in (test, ref):
+        if level not in levels:
+            return {"error": "bad_level", "message": f"'{level}' is not a level of '{factor}'. Levels: {levels}"}
+    if test == ref:
+        return {"error": "bad_contrast", "message": "Test and reference levels must differ."}
+    return None
+
+
+# Fewest samples per condition compare_composition will test; below this no test has power.
+_MIN_COMPOSITION_SAMPLES = 3
+
+
+def compare_composition(contrast: list[str], sample_key: str, celltype_key: str = "cell_type") -> Summary:
+    """Compare cell-type proportions between two conditions across replicate samples.
+
+    Proportions are computed per sample (sample_key x condition). If every sample appears in
+    both conditions the test is paired (Wilcoxon signed-rank on per-sample proportions),
+    otherwise unpaired (Mann-Whitney U); p-values are Benjamini-Hochberg adjusted across cell
+    types. Guardrail: refuses with fewer than _MIN_COMPOSITION_SAMPLES samples per condition,
+    where no test has power. Proportions are compositional (one type rising forces others down), which
+    the summary notes. Non-mutating.
+    """
+    from scipy.stats import mannwhitneyu, wilcoxon
+    from statsmodels.stats.multitest import multipletests
+
+    adata = SESSION.require_adata()
+    if err := _check_contrast(adata, contrast) or _check_columns(adata, [sample_key, celltype_key]):
+        return err
+    factor, test, ref = contrast
+    if sample_key == factor:
+        return {"error": "bad_sample_key", "message": "sample_key must identify replicates, not the condition."}
+
+    obs = adata.obs[[factor, sample_key, celltype_key]].astype(str)
+    obs = obs[obs[factor].isin([test, ref])]
+    counts = obs.groupby([sample_key, factor, celltype_key]).size().unstack(fill_value=0)
+    props = counts.div(counts.sum(axis=1), axis=0)
+    per_level = props.index.get_level_values(factor).value_counts()
+    if min(per_level.get(test, 0), per_level.get(ref, 0)) < _MIN_COMPOSITION_SAMPLES:
+        return {
+            "error": "too_few_samples",
+            "message": f"Need at least {_MIN_COMPOSITION_SAMPLES} samples per condition; have {per_level.to_dict()}. "
+            "Describe proportions without a test.",
+        }
+
+    by_level = {lvl: props.xs(lvl, level=factor) for lvl in (test, ref)}
+    shared = by_level[test].index.intersection(by_level[ref].index)
+    paired = len(shared) == len(by_level[test]) == len(by_level[ref])
+    rows = []
+    for ct in props.columns:
+        t, r = by_level[test][ct], by_level[ref][ct]
+        if paired:
+            t, r = t.loc[shared], r.loc[shared]
+            p = float(wilcoxon(t, r).pvalue) if (t - r).abs().sum() > 0 else 1.0
+        else:
+            p = float(mannwhitneyu(t, r).pvalue)
+        eps = 1e-4  # keeps the log ratio finite when a type is absent from a sample
+        rows.append({
+            "cell_type": ct,
+            f"mean_prop_{ref}": float(r.mean()),
+            f"mean_prop_{test}": float(t.mean()),
+            "log2_ratio": float(np.log2((t.mean() + eps) / (r.mean() + eps))),
+            "n_samples_higher_in_test": int((t.values > r.values).sum()) if paired else None,
+            "pvalue": p,
+        })
+    table = pd.DataFrame(rows).set_index("cell_type")
+    table["padj"] = multipletests(table["pvalue"], method="fdr_bh")[1]
+    table = table.sort_values("padj")
+
+    SESSION.composition = {
+        "table": table,
+        "proportions": props,
+        "settings": {"contrast": list(contrast), "sample_key": sample_key, "celltype_key": celltype_key,
+                     "paired": paired, "test": "Wilcoxon signed-rank" if paired else "Mann-Whitney U"},
+    }
+    return {
+        "contrast": contrast,
+        "paired": paired,
+        "test": SESSION.composition["settings"]["test"],
+        "n_samples": {lvl: int(len(by_level[lvl])) for lvl in (test, ref)},
+        "results": {
+            ct: {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}
+            for ct, row in table.to_dict("index").items()
+        },
+        "n_significant": int((table["padj"] < _DE_PADJ).sum()),
+        "note": "Proportions are compositional: a large shift in one type moves the others. With few "
+        "samples, the smallest attainable p-value is limited (paired Wilcoxon, n=8: p >= 0.0078).",
+    }
+
+
+def _pseudobulk(adata, counts, groups: list[str], min_cells: int):
+    """Sum raw counts per group of cells. Returns (samples x genes counts, sample metadata
+    with n_cells), dropping groups with fewer than min_cells cells."""
+    keys = adata.obs[groups].astype(str).agg("|".join, axis=1)
+    codes, uniques = pd.factorize(keys)
+    indicator = sparse.csr_matrix(
+        (np.ones(len(codes)), (codes, np.arange(len(codes)))), shape=(len(uniques), len(codes))
+    )
+    summed = indicator @ counts
+    summed = summed.toarray() if sparse.issparse(summed) else np.asarray(summed)
+    meta = pd.DataFrame([u.split("|") for u in uniques], columns=groups, index=uniques)
+    meta["n_cells"] = np.bincount(codes)
+    keep = meta["n_cells"].to_numpy() >= min_cells
+    df = pd.DataFrame(summed[keep].round().astype(np.int64), index=uniques[keep], columns=adata.var_names)
+    return df, meta[keep]
+
+
+def run_pseudobulk_de(
+    contrast: list[str],
+    sample_key: str,
+    covariates: list[str] | None = None,
+    celltype_key: str = "cell_type",
+    cell_types: list[str] | None = None,
+    min_cells: int = 10,
+) -> Summary:
+    """Pseudobulk differential expression per cell type with PyDESeq2 (Wald test).
+
+    For each cell type, raw counts are summed per sample (sample_key x condition). Samples
+    with fewer than min_cells cells are dropped. DESeq2 is fitted with design
+    ~ covariates + factor and the contrast [factor, test, reference] is tested with a Wald
+    test. Adding the replicate column (e.g. donor) as a covariate gives a paired design.
+
+    Guardrails: uses raw counts (layers['counts'], or X before normalize); refuses unknown
+    columns or levels, covariates that vary within a pseudobulk sample, and confounded
+    designs (a covariate that fully determines the condition). A cell type is skipped, with
+    the reason, when fewer than 2 samples per condition remain or no residual degrees of
+    freedom are left.
+    """
+    import logging
+
+    from pydeseq2.dds import DeseqDataSet
+    from pydeseq2.ds import DeseqStats
+
+    adata = SESSION.require_adata()
+    covariates = list(covariates or [])
+    if err := _check_contrast(adata, contrast) or _check_columns(adata, [sample_key, celltype_key, *covariates]):
+        return err
+    factor, test, ref = contrast
+    if factor in covariates:
+        return {"error": "bad_covariates", "message": f"'{factor}' is the contrast factor; don't list it as a covariate."}
+    if sample_key == factor:
+        return {"error": "bad_sample_key", "message": "sample_key must identify replicates, not the condition."}
+    bad_names = [c for c in [factor, *covariates] if not str(c).isidentifier()]
+    if bad_names:
+        return {"error": "bad_column_name", "message": f"Design columns must be identifiers for the formula: {bad_names}"}
+
+    if "counts" in adata.layers:
+        counts = adata.layers["counts"]
+    elif _looks_like_counts(adata.X):
+        counts = adata.X
+    else:
+        return {"error": "no_raw_counts", "message": "Pseudobulk DE needs raw counts (layers['counts'])."}
+
+    # A covariate must be constant within each pseudobulk sample, or summing mixes its levels.
+    groups = [sample_key, factor]
+    per_sample = adata.obs[groups + covariates].astype(str).drop_duplicates()
+    varying = [c for c in covariates if c not in groups and per_sample.groupby(groups)[c].nunique().max() > 1]
+    if varying:
+        return {"error": "covariate_varies_within_sample",
+                "message": f"{varying} vary within a {sample_key} x {factor} sample; pseudobulk can't adjust for them."}
+
+    available = sorted(map(str, adata.obs[celltype_key].unique()))
+    if cell_types is None:
+        cell_types = available
+    unknown = [c for c in cell_types if c not in available]
+    if unknown:
+        return {"error": "bad_cell_types", "message": f"Unknown cell types {unknown}. Available: {available}"}
+
+    formula = "~" + " + ".join([*covariates, factor])
+    in_contrast = adata.obs[factor].astype(str).isin([test, ref]).to_numpy()
+    SESSION.de_results = {}
+    results, skipped = {}, {}
+    logging.getLogger("pydeseq2").setLevel(logging.ERROR)
+    for ct in cell_types:
+        mask = in_contrast & (adata.obs[celltype_key].astype(str) == ct).to_numpy()
+        sub = adata[mask]
+        df, meta = _pseudobulk(sub, counts[mask], sorted(set(groups + covariates)), min_cells)
+        sizes = meta[factor].value_counts()
+        if min(sizes.get(test, 0), sizes.get(ref, 0)) < 2:
+            skipped[ct] = f"fewer than 2 samples per condition with >= {min_cells} cells ({sizes.to_dict()})"
+            continue
+        design = meta[[*covariates, factor]].astype(str)
+        X = pd.get_dummies(design, drop_first=True).astype(float)
+        X.insert(0, "intercept", 1.0)
+        rank = int(np.linalg.matrix_rank(X.to_numpy()))
+        if rank < X.shape[1]:
+            return {"error": "confounded_design", "message": (
+                f"In '{ct}', covariates {covariates} are confounded with '{factor}' (design rank {rank} < "
+                f"{X.shape[1]}). Drop the confounded covariate; its effect can't be separated.")}
+        if len(design) - rank < 1:
+            skipped[ct] = "no residual degrees of freedom (too few samples for the design)"
+            continue
+        # Genes with at least 10 counts in at least as many samples as the smaller condition.
+        min_group = int(min(sizes[test], sizes[ref]))
+        df = df.loc[:, (df >= 10).sum(axis=0) >= min_group]
+
+        dds = DeseqDataSet(counts=df, metadata=design, design=formula, quiet=True)
+        dds.deseq2()
+        stats = DeseqStats(dds, contrast=[factor, test, ref], quiet=True)
+        stats.summary()
+        res = stats.results_df.copy()
+        res.attrs["n_samples"] = {str(k): int(v) for k, v in sizes.items()}
+        SESSION.de_results[ct] = res
+
+        sig = res[res["padj"] < _DE_PADJ]
+        results[ct] = {
+            "n_samples": sizes.to_dict(),
+            "n_cells": int(meta["n_cells"].sum()),
+            "genes_tested": int(res["padj"].notna().sum()),
+            "n_significant": int(len(sig)),
+            "n_up": int((sig["log2FoldChange"] > 0).sum()),
+            "n_down": int((sig["log2FoldChange"] < 0).sum()),
+            "top_up": _top_genes(res, "up", 5),
+            "top_down": _top_genes(res, "down", 5),
+        }
+
+    SESSION.de_settings = {"contrast": list(contrast), "sample_key": sample_key, "covariates": covariates,
+                           "celltype_key": celltype_key, "min_cells": min_cells, "design": formula,
+                           "skipped": skipped}
+    out: Summary = {"design": formula, "contrast": contrast, "results": results, "skipped": skipped}
+    if not results:
+        out["warning"] = "No cell type could be tested."
+    return out
+
+
+def _top_genes(res: pd.DataFrame, direction: str, n: int) -> list[dict]:
+    sig = res[res["padj"] < _DE_PADJ]
+    sig = sig[sig["log2FoldChange"] > 0] if direction == "up" else sig[sig["log2FoldChange"] < 0] if direction == "down" else sig
+    ranked = sig.assign(_abs=sig["log2FoldChange"].abs()).sort_values(["padj", "_abs"], ascending=[True, False])
+    return [{"gene": str(g), "log2FC": round(float(r["log2FoldChange"]), 3), "padj": float(f"{r['padj']:.3g}")}
+            for g, r in ranked.head(n).iterrows()]
+
+
+def get_top_genes(cell_type: str, n: int = 20, direction: str = "both") -> Summary:
+    """Top significant DE genes for one cell type, ranked by padj then |log2FC|. Non-mutating."""
+    if cell_type not in SESSION.de_results:
+        return {"error": "no_de_results", "message": f"No DE results for '{cell_type}'. "
+                f"Tested: {sorted(SESSION.de_results)}"}
+    return {"cell_type": cell_type, "direction": direction,
+            "genes": _top_genes(SESSION.de_results[cell_type], direction, n)}
+
+
+def query_genes(genes: list[str], cell_types: list[str] | None = None) -> Summary:
+    """log2FC and padj for specific genes in each tested cell type (or the ones given), so the
+    agent can check a gene before writing about it. Non-mutating."""
+    if not SESSION.de_results:
+        return {"error": "no_de_results", "message": "Run run_pseudobulk_de first."}
+    cts = cell_types or sorted(SESSION.de_results)
+    out: dict[str, dict] = {}
+    for gene in genes:
+        out[gene] = {}
+        for ct in cts:
+            res = SESSION.de_results.get(ct)
+            if res is None or gene not in res.index or pd.isna(res.loc[gene, "padj"]):
+                out[gene][ct] = "not tested"
+                continue
+            r = res.loc[gene]
+            out[gene][ct] = {"log2FC": round(float(r["log2FoldChange"]), 3), "padj": float(f"{r['padj']:.3g}"),
+                             "significant": bool(r["padj"] < _DE_PADJ)}
+    return {"genes": out}
 
 
 def summarize_findings() -> Summary:

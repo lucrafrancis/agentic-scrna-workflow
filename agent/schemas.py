@@ -109,7 +109,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "batch_key": {"type": "string", "description": "obs column identifying batches to correct."},
+                "batch_key": {
+                    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                    "description": "obs column identifying batches to correct, or a list of columns "
+                    "combined into one batch per combination (e.g. ['donor', 'condition']).",
+                },
                 "max_epochs": {"type": "integer", "description": "Training epochs (default: scVI auto)."},
             },
             "required": [],
@@ -151,6 +155,89 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "model": {"type": "string", "description": "CellTypist model (default Immune_All_Low.pkl)."}
             },
             "required": [],
+        },
+    },
+    {
+        "name": "compare_composition",
+        "description": "Compare cell-type proportions between two conditions across replicate "
+        "samples (e.g. donors). Proportions are computed per sample; the test is paired "
+        "(Wilcoxon signed-rank) when every sample has both conditions, else Mann-Whitney U, with "
+        "Benjamini-Hochberg correction. Refuses with too few samples per condition. Run after "
+        "annotate_celltypes. Non-mutating.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contrast": {
+                    "type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3,
+                    "description": "[condition_column, test_level, reference_level], e.g. ['condition', 'stim', 'ctrl'].",
+                },
+                "sample_key": {"type": "string", "description": "obs column identifying replicates, e.g. 'donor'."},
+                "celltype_key": {"type": "string", "description": "obs column with cell types (default 'cell_type')."},
+            },
+            "required": ["contrast", "sample_key"],
+        },
+    },
+    {
+        "name": "run_pseudobulk_de",
+        "description": "Pseudobulk differential expression per cell type with PyDESeq2 (Wald "
+        "test). Raw counts are summed per sample (sample_key x condition) within each cell "
+        "type; design = ~ covariates + factor. Put the replicate column (e.g. 'donor') in "
+        "covariates for a paired design when each replicate has both conditions. Refuses "
+        "confounded designs and covariates that vary within a sample; skips cell types with "
+        "fewer than 2 samples per condition, and says why. Run after annotate_celltypes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contrast": {
+                    "type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3,
+                    "description": "[factor, test_level, reference_level], e.g. ['condition', 'stim', 'ctrl'].",
+                },
+                "sample_key": {"type": "string", "description": "obs column identifying replicates, e.g. 'donor'."},
+                "covariates": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Categorical columns to adjust for, e.g. ['donor'] (paired) or ['batch'].",
+                },
+                "celltype_key": {"type": "string", "description": "obs column with cell types (default 'cell_type')."},
+                "cell_types": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Cell types to test (default: all).",
+                },
+                "min_cells": {
+                    "type": "integer",
+                    "description": "Minimum cells for a sample to enter a cell type's pseudobulk (default 10).",
+                },
+            },
+            "required": ["contrast", "sample_key"],
+        },
+    },
+    {
+        "name": "get_top_genes",
+        "description": "Top significant DE genes for one tested cell type, ranked by padj then "
+        "|log2FC|. Requires run_pseudobulk_de.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cell_type": {"type": "string", "description": "A cell type tested by run_pseudobulk_de."},
+                "n": {"type": "integer", "description": "Number of genes (default 20)."},
+                "direction": {"type": "string", "enum": ["up", "down", "both"], "description": "Default 'both'."},
+            },
+            "required": ["cell_type"],
+        },
+    },
+    {
+        "name": "query_genes",
+        "description": "log2FC and padj for specific genes in each tested cell type. Use it to "
+        "check a gene before writing about it. Requires run_pseudobulk_de.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "genes": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols."},
+                "cell_types": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Cell types to report (default: all tested).",
+                },
+            },
+            "required": ["genes"],
         },
     },
     {
@@ -197,6 +284,10 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "cluster": tools.cluster,
     "identify_markers": tools.identify_markers,
     "annotate_celltypes": tools.annotate_celltypes,
+    "compare_composition": tools.compare_composition,
+    "run_pseudobulk_de": tools.run_pseudobulk_de,
+    "get_top_genes": tools.get_top_genes,
+    "query_genes": tools.query_genes,
     "summarize_findings": tools.summarize_findings,
     "generate_report": tools.generate_report,
 }

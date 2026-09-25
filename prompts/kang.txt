@@ -1,0 +1,6 @@
+Dataset: data/kang.h5ad
+PBMCs from 8 donors (Kang et al. 2018). Each donor's cells were split into a control sample
+and a sample stimulated with interferon-beta (IFN-β) for 6 hours.
+Take it from raw counts to annotated cell types, then compare stimulated against control:
+test whether cell-type proportions change and which genes are differentially expressed in
+each cell type. Write a report.

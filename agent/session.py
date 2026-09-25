@@ -25,6 +25,8 @@ class Session:
         self.paths: RunPaths | None = None
         # Set by the dimensionality-reduction tool; read by clustering. e.g. "X_pca" / "X_scVI".
         self.representation: str | None = None
+        # Set by run_scvi: the obs columns it corrected for (empty for none / PCA).
+        self.scvi_batch_columns: list[str] = []
         # Set by check_gene_identifiers; read by compute_qc.
         self.gene_format: str | None = None  # "symbol" | "ensembl" | "other"
         self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
@@ -37,6 +39,11 @@ class Session:
         self.doublet_scores: np.ndarray | None = None
         # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
         self.n_duplicate_barcodes = 0
+        # Condition comparisons. Set by compare_composition / run_pseudobulk_de; read by the
+        # inspection tools and the report.
+        self.composition: dict | None = None  # {"table", "proportions", "settings"}
+        self.de_results: dict[str, pd.DataFrame] = {}  # cell type -> PyDESeq2 results
+        self.de_settings: dict | None = None
         # generate_report rejections so far; after the limit the report is written with warnings.
         self.report_attempts = 0
         self._step = 0
