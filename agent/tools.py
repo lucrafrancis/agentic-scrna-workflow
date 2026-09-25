@@ -1025,7 +1025,8 @@ def generate_report(report_markdown: str) -> Summary:
     """Check and render the narrative, draw figures, and write the report and annotated .h5ad.
 
     Every number in the narrative must be a placeholder (see summarize_findings), so values
-    come from code rather than the model. Any problem rejects the whole report with a list
+    come from code rather than the model, and every final cell type must be supported by at
+    least one marker the agent checked with check_markers. Any problem rejects the whole report with a list
     of all issues and nothing is written; after _MAX_REPORT_REJECTIONS it is written with
     the unresolved problems shown at the top. report.build_report then adds the run
     summary, decisions table, captioned figures and Methods from the tool log.
@@ -1034,6 +1035,12 @@ def generate_report(report_markdown: str) -> Summary:
     paths = SESSION.paths
     log = report.read_log(paths.tool_log)
     narrative, problems = report.render(report_markdown, log, adata)
+    if unsupported := report.unsupported_cell_types(adata, log):
+        problems.append(
+            f"No marker you checked is enriched in these cell types: {unsupported}. Use check_markers on "
+            "canonical markers for each of them (padj < 0.05, log2FC > 1, expressed in >= 25% of the type's "
+            "cells), and relabel any type whose markers don't support it."
+        )
     if problems and SESSION.report_attempts < _MAX_REPORT_REJECTIONS:
         SESSION.report_attempts += 1
         return {

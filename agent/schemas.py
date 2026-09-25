@@ -300,7 +300,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "generate_report",
         "description": "Write the final Markdown report. Never type a number: use {{fact}}, "
         "{{celltype:NAME}}, {{celltypes:A|B}} and {{table:name}} placeholders, which the tool "
-        "fills in. Any problem rejects the whole report with a list of all issues; fix them "
+        "fills in. Every cell type needs a marker you checked with check_markers that is "
+        "enriched in it. Any problem rejects the whole report with a list of all issues; fix them "
         "all and resubmit. The tool adds the decisions table, captioned figures and Methods, "
         "and writes the annotated .h5ad. Call this last.",
         "input_schema": {

@@ -545,32 +545,53 @@ def _volcano_figure(figdir: Path) -> Figure | None:
 _CANON_PADJ, _CANON_LFC, _CANON_PCT = 0.05, 1.0, 0.25
 
 
-def _canonical_dotplot_figure(adata, log: list[Entry], figdir: Path) -> Figure | None:
-    """Dotplot of the canonical markers the agent checked (check_markers), kept only where
-    they are enriched in at least one final cell type, grouped by the type they mark."""
-    import matplotlib.pyplot as plt
+def _checked_marker_support(adata, log: list[Entry]) -> tuple[list[str], pd.DataFrame] | None:
+    """The genes the agent checked with check_markers, and each one's statistics in every
+    final cell type that passes the enrichment filter. None if there is nothing to test."""
     import scanpy as sc
 
     checked = list(dict.fromkeys(g for e in log if e["tool"] == "check_markers" and "error" not in e["summary"]
                                  for g in e["args"]["genes"] if g in adata.var_names))
-    if not checked or "cell_type" not in adata.obs or adata.obs["cell_type"].nunique() < 2:
+    if "cell_type" not in adata.obs or adata.obs["cell_type"].nunique() < 2:
         return None
+    if not checked:
+        return [], pd.DataFrame(columns=["group", "names", "logfoldchanges"])
     key = "canonical_cell_type"
     sc.tl.rank_genes_groups(adata, "cell_type", method="wilcoxon", key_added=key, pts=True, n_genes=adata.n_vars)
     stats = sc.get.rank_genes_groups_df(adata, group=None, key=key)
     stats = stats[stats["names"].isin(checked)]
     passing = stats[(stats["pvals_adj"] < _CANON_PADJ) & (stats["logfoldchanges"] > _CANON_LFC)
                     & (stats["pct_nz_group"] >= _CANON_PCT)]
-    if passing.empty:
+    return checked, passing.assign(group=passing["group"].astype(str))
+
+
+def unsupported_cell_types(adata, log: list[Entry]) -> list[str]:
+    """Final cell types that no marker checked by the agent is enriched in. The agent brings
+    the marker knowledge; this only checks that every label has some."""
+    support = _checked_marker_support(adata, log)
+    if support is None:
+        return []
+    _, passing = support
+    types = sorted(adata.obs["cell_type"].astype(str).unique())
+    return [ct for ct in types if ct not in set(passing["group"])]
+
+
+def _canonical_dotplot_figure(adata, log: list[Entry], figdir: Path) -> Figure | None:
+    """Dotplot of the canonical markers the agent checked (check_markers), kept only where
+    they are enriched in at least one final cell type, grouped by the type they mark."""
+    import matplotlib.pyplot as plt
+    import scanpy as sc
+
+    support = _checked_marker_support(adata, log)
+    if support is None or support[1].empty:
         return None
+    checked, passing = support
     # Each gene goes in the block of the type where it is most enriched.
     best = passing.sort_values("logfoldchanges", ascending=False).drop_duplicates("names")
     order = [str(c) for c in adata.obs["cell_type"].cat.categories] if hasattr(adata.obs["cell_type"], "cat") \
         else sorted(adata.obs["cell_type"].astype(str).unique())
-    blocks = {ct: [g for g in checked if g in set(best.loc[best["group"].astype(str) == ct, "names"])] for ct in order}
+    blocks = {ct: [g for g in checked if g in set(best.loc[best["group"] == ct, "names"])] for ct in order}
     blocks = {ct: genes for ct, genes in blocks.items() if genes}
-    # Rows follow the gene blocks, so the enriched dots run down a diagonal; types without a
-    # shown marker go last.
     rows = list(blocks) + [ct for ct in order if ct not in blocks]
     genes = [g for block in blocks.values() for g in block]
     with _style():

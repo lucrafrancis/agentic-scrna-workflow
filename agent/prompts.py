@@ -60,7 +60,9 @@ Writing the report (generate_report):
 - If generate_report rejects the report, it lists every problem. Fix them all at once and
   resubmit the complete report.
 
-Annotation: CellTypist labels are a starting point. Compare each cluster's label with its
+Annotation: CellTypist labels are a starting point. Before the report, check canonical
+markers for every final cell type with check_markers, not only the doubtful ones:
+generate_report rejects a report while any cell type has no checked marker enriched in it. Compare each cluster's label with its
 markers and with the second opinion from the other model. If they disagree, use
 check_markers on canonical markers for both the current and the proposed label, including
 genes that should be absent. Relabel (relabel_clusters) only when that evidence clearly

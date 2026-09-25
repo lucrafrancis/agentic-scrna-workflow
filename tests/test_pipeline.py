@@ -175,3 +175,25 @@ def test_canonical_dotplot_uses_checked_markers(logged_run):
 
     assert fig is not None and (SESSION.paths.figures / fig.name).exists()
     assert "1 of 2 shown" in fig.caption and "Not enriched in any type: GENE200" in fig.caption
+
+
+def test_report_requires_a_checked_marker_for_every_cell_type(logged_run):
+    """A report is rejected while any final cell type has no checked marker enriched in it.
+    GENE0-29 mark population A and GENE30-59 population B (see make_adata)."""
+    from agent import report
+
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    adata.obs["cell_type"] = pd.Categorical(np.where(a_cells, "Type A", "Type B"))
+    logged_run("summarize_findings")
+    narrative = "# R\n\n## Annotation\n{{table:clusters}}\n\n{{table:composition}}"
+
+    logged_run("check_markers", genes=["GENE0"])
+    assert report.unsupported_cell_types(adata, report.read_log(SESSION.paths.tool_log)) == ["Type B"]
+    result = logged_run("generate_report", report_markdown=narrative)
+    assert result["error"] == "report_rejected"
+    assert any("['Type B']" in p for p in result["problems"])
+
+    logged_run("check_markers", genes=["GENE30"])
+    result = logged_run("generate_report", report_markdown=narrative)
+    assert "error" not in result, result
