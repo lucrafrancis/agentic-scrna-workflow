@@ -1,0 +1,13 @@
+Dataset: data/kang.h5ad
+Peripheral blood mononuclear cells (PBMCs) from 8 patients with systemic lupus erythematosus
+(Kang et al., Nat Biotechnol 2018). Each patient's PBMCs were split in two: one half was
+stimulated with recombinant interferon-beta (IFN-β, 100 U/mL) for 6 hours, the other was left
+untreated for the same 6 hours in culture. The 8 stimulated samples were pooled and captured
+in one 10x Chromium run, and the 8 control samples in another, so condition and 10x run are
+the same thing. Cells were assigned to patients afterwards from their genotypes (demuxlet),
+which also removed most doublets: only doublets of two cells from the same patient remain.
+The obs columns are `condition` (ctrl / stim) and `donor`.
+
+Take it from raw counts to annotated cell types, then compare stimulated against control:
+test whether cell-type proportions change and which genes are differentially expressed in
+each cell type. Write a report.
