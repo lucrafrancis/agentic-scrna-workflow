@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import anndata as ad
+import numpy as np
+import pandas as pd
 
 from agent.config import RunPaths
 
@@ -23,13 +25,32 @@ class Session:
         self.paths: RunPaths | None = None
         # Set by the dimensionality-reduction tool; read by clustering. e.g. "X_pca" / "X_scVI".
         self.representation: str | None = None
+        # Set by run_scvi: the obs columns it corrected for (empty for none / PCA).
+        self.scvi_batch_columns: list[str] = []
         # Set by check_gene_identifiers; read by compute_qc.
         self.gene_format: str | None = None  # "symbol" | "ensembl" | "other"
         self.mito_prefix: str | None = None  # e.g. "MT-" (human) / "mt-" (mouse); None if unknown
         # Set by normalize; read by annotate_celltypes (CellTypist expects 1e4 + log1p).
         self.normalize_target_sum: float | None = None
+        # Snapshots of cells that filtering removes, kept so the report's figures can show
+        # the full distribution each cutoff was chosen from. Set by filter_cells_and_genes
+        # (first call only) and detect_doublets.
+        self.qc_before_filter: pd.DataFrame | None = None
+        self.doublet_scores: np.ndarray | None = None
         # Structural hygiene applied at load (reported by inspect_dataset), not agent decisions.
         self.n_duplicate_barcodes = 0
+        # Condition comparisons. Set by compare_composition / run_pseudobulk_de; read by the
+        # inspection tools and the report.
+        self.composition: dict | None = None  # {"table", "proportions", "settings"}
+        self.de_results: dict[str, pd.DataFrame] = {}  # cell type -> PyDESeq2 results
+        self.de_settings: dict | None = None
+        # Set by identify_markers: every gene's marker statistics per cluster, indexed by
+        # (cluster, gene). Read by check_markers.
+        self.marker_table: pd.DataFrame | None = None
+        # Set by relabel_clusters: each call's changes and stated reason, for the report.
+        self.relabels: list[dict] = []
+        # generate_report rejections so far; after the limit the report is written with warnings.
+        self.report_attempts = 0
         self._step = 0
 
     def load(self, path) -> ad.AnnData:
@@ -51,13 +72,16 @@ class Session:
         re-running a dataset would otherwise interleave two runs in one tool_calls.jsonl and
         leave run 1's checkpoints (e.g. 06_after_scvi.h5ad) sitting next to run 2's as if
         they were one sequence. The audit trail is a deliverable — it must describe exactly
-        one run. Figures, report and annotated .h5ad are simply overwritten in place.
+        one run. Old figures are cleared too, since the set drawn depends on the steps run; the
+        report and annotated .h5ad are simply overwritten in place.
         """
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.paths.tool_log.unlink(missing_ok=True)
-        for stale in self.paths.checkpoints.glob("*.h5ad"):
+        self.paths.usage_log.unlink(missing_ok=True)
+        for stale in [*self.paths.checkpoints.glob("*.h5ad"), *self.paths.figures.glob("*.png")]:
             stale.unlink()
         self._step = 0
+        self.report_attempts = 0
 
     def require_adata(self) -> ad.AnnData:
         if self.adata is None:

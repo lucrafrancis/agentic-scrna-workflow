@@ -1,0 +1,3 @@
+Dataset: data/pbmc_multibatch.h5ad
+PBMCs from two separate 10x runs (PBMC5k and PBMC10k), combined into one object.
+Take it from raw counts to annotated cell types and write a report.

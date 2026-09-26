@@ -31,6 +31,33 @@ def _log_tool_call(name: str, args: dict, summary: dict) -> None:
         f.write(json.dumps({"tool": name, "args": args, "summary": summary}) + "\n")
 
 
+_USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def _estimate_cost(totals: dict[str, int]) -> float | None:
+    price = config.PRICE_PER_MTOK.get(config.MODEL)
+    if price is None:
+        return None
+    return (
+        totals["input_tokens"] * price["input"]
+        + totals["cache_creation_input_tokens"] * price["input"] * config.CACHE_WRITE_MULTIPLIER
+        + totals["cache_read_input_tokens"] * price["input"] * config.CACHE_READ_MULTIPLIER
+        + totals["output_tokens"] * price["output"]
+    ) / 1e6
+
+
+def _log_usage(totals: dict[str, int]) -> None:
+    """Print the run's token totals and estimated cost, and write them to usage.jsonl."""
+    cost = _estimate_cost(totals)
+    total_in = sum(totals[k] for k in _USAGE_KEYS[:3])
+    cached = 100 * totals["cache_read_input_tokens"] / total_in if total_in else 0
+    cost_str = f", ~${cost:.2f}" if cost is not None else ""
+    print(f"\n\U0001f4ca {totals['requests']} requests, {total_in:,} input tokens ({cached:.0f}% from cache), "
+          f"{totals['output_tokens']:,} output tokens{cost_str}")
+    record = {"model": config.MODEL, **totals, "estimated_cost_usd": round(cost, 4) if cost is not None else None}
+    SESSION.paths.usage_log.write_text(json.dumps(record) + "\n")
+
+
 def _run_tool(name: str, args: dict) -> dict:
     """Dispatch to the registered tool, converting exceptions into an error summary the
     agent can react to rather than a crash."""
@@ -59,6 +86,7 @@ def run_agent(initial_user_message: str, verbose: bool = True) -> list[dict]:
     """
     client = anthropic.Anthropic()
     messages: list[dict] = [{"role": "user", "content": initial_user_message}]
+    totals = {"requests": 0, **{k: 0 for k in _USAGE_KEYS}}
 
     for _turn in range(config.MAX_TURNS):
         response = client.messages.create(
@@ -67,7 +95,13 @@ def run_agent(initial_user_message: str, verbose: bool = True) -> list[dict]:
             system=SYSTEM_PROMPT,
             tools=TOOL_SCHEMAS,
             messages=messages,
+            # Cache the conversation so far: each turn resends it, and only the new tail is
+            # billed at the full input price.
+            cache_control={"type": "ephemeral"},
         )
+        totals["requests"] += 1
+        for key in _USAGE_KEYS:
+            totals[key] += getattr(response.usage, key, None) or 0
         messages.append({"role": "assistant", "content": response.content})
 
         if verbose:
@@ -102,4 +136,5 @@ def run_agent(initial_user_message: str, verbose: bool = True) -> list[dict]:
             )
         messages.append({"role": "user", "content": tool_results})
 
+    _log_usage(totals)
     return messages

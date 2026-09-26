@@ -20,6 +20,12 @@ MAX_TOKENS = 16384
 # Safety valve so a misbehaving agent can't loop forever.
 MAX_TURNS = 40
 
+# USD per million tokens, for the cost estimate in each run's usage.jsonl. Cache writes
+# (5-minute TTL) cost 1.25x the input price and cache reads 0.1x.
+PRICE_PER_MTOK = {"claude-sonnet-5": {"input": 2.00, "output": 10.00}}
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.1
+
 # --- Reproducibility ---------------------------------------------------------
 SEED = 0
 
@@ -63,6 +69,10 @@ class RunPaths:
     @property
     def tool_log(self) -> Path:
         return self.dir / "tool_calls.jsonl"
+
+    @property
+    def usage_log(self) -> Path:
+        return self.dir / "usage.jsonl"
 
 
 def set_global_seed(seed: int = SEED) -> None:

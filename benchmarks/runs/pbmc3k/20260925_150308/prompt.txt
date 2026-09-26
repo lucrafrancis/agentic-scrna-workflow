@@ -1,0 +1,3 @@
+Dataset: data/pbmc3k.h5ad
+Peripheral blood mononuclear cells (PBMCs) from one healthy donor, 10x Genomics, single run.
+Take it from raw counts to annotated cell types and write a report.

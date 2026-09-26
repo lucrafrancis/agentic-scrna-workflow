@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
+import pandas as pd
+
 from agent import tools
 from agent.session import SESSION
 
@@ -89,3 +92,108 @@ def test_normalize_is_idempotent_guarded(synthetic_h5ad):
     tools.filter_cells_and_genes(min_genes=5, max_pct_mt=90, min_cells=1)
     assert "checkpoint" in tools.normalize(n_top_genes=50)
     assert tools.normalize(n_top_genes=50)["error"] == "already_normalized"
+
+
+NARRATIVE = """# Test report
+
+## Overview
+Short intro.
+
+## Quality Control
+QC text.
+
+## Doublet Detection
+Doublet text.
+
+## Clustering
+Cluster text.
+
+## Conclusions
+Done.
+"""
+
+
+def test_report_built_from_tool_log(logged_run):
+    """The report's code-built parts (decisions table, figures, Methods) come from the log."""
+    logged_run("summarize_findings")
+    result = logged_run("generate_report", report_markdown=NARRATIVE)
+    assert "error" not in result, result
+
+    text = SESSION.paths.report.read_text()
+    assert "## Key analysis decisions" in text
+    assert "| Mitochondrial cutoff | 5% |" in text
+    assert "**90%** (changed)" in text
+    assert "## Methods" in text
+    # The decisions table follows the overview; each figure sits in its own section.
+    assert text.index("## Overview") < text.index("## Key analysis decisions") < text.index("## Quality Control")
+    qc_section = text[text.index("## Quality Control") : text.index("## Doublet Detection")]
+    assert "figures/qc_thresholds.png" in qc_section
+    doublet_section = text[text.index("## Doublet Detection") : text.index("## Clustering")]
+    assert "figures/doublet_scores.png" in doublet_section
+    assert "figures/umap.png" in text[text.index("## Clustering") : text.index("## Conclusions")]
+    for name in ("qc_thresholds.png", "doublet_scores.png", "umap.png"):
+        assert (SESSION.paths.figures / name).exists()
+
+
+def test_doublets_batch_key_can_be_chosen(batched_h5ad):
+    """The agent can override the detected batch column, e.g. when donors shared one run."""
+    SESSION.load(batched_h5ad)
+    assert tools.detect_doublets(batch_key=None)["batch_key"] is None
+    assert tools.detect_doublets(batch_key="nope")["error"] == "invalid_batch_key"
+
+
+def test_check_markers_reports_rank_stats_and_absence(logged_run):
+    """GENE0-29 are raised in population A only (see make_adata), so in A's cluster GENE0 ranks
+    near the top and is widely expressed, and in B's cluster it is not enriched."""
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    cluster_a = adata.obs.loc[a_cells, "leiden"].astype(str).value_counts().index[0]
+    cluster_b = adata.obs.loc[~a_cells, "leiden"].astype(str).value_counts().index[0]
+
+    result = tools.check_markers(["GENE0", "NOT_A_GENE"], clusters=[cluster_a, cluster_b])
+
+    a, b = result["genes"]["GENE0"][cluster_a], result["genes"]["GENE0"][cluster_b]
+    assert int(a["rank"].split(" of ")[0]) <= 30 and a["log2FC"] > 1 and a["pct_in_cluster"] > 90
+    assert b["log2FC"] < 0
+    assert result["not_found"] == ["NOT_A_GENE"]
+    assert tools.check_markers(["GENE0"], clusters=["99"])["error"] == "bad_clusters"
+    json.dumps(result)
+
+
+def test_canonical_dotplot_uses_checked_markers(logged_run):
+    """The canonical-marker dotplot shows the genes the agent checked, keeping only those
+    enriched in some cell type. GENE0 marks population A; GENE200 is background noise."""
+    from agent import report
+
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    adata.obs["cell_type"] = pd.Categorical(np.where(a_cells, "Type A", "Type B"))
+    logged_run("check_markers", genes=["GENE0", "GENE200"])
+    SESSION.paths.figures.mkdir(parents=True, exist_ok=True)
+
+    fig = report._canonical_dotplot_figure(adata, report.read_log(SESSION.paths.tool_log), SESSION.paths.figures)
+
+    assert fig is not None and (SESSION.paths.figures / fig.name).exists()
+    assert "1 of 2 shown" in fig.caption and "Not enriched in any type: GENE200" in fig.caption
+
+
+def test_report_requires_a_checked_marker_for_every_cell_type(logged_run):
+    """A report is rejected while any final cell type has no checked marker enriched in it.
+    GENE0-29 mark population A and GENE30-59 population B (see make_adata)."""
+    from agent import report
+
+    adata = SESSION.adata
+    a_cells = adata.obs_names.str.replace("cell", "").astype(int) < 200
+    adata.obs["cell_type"] = pd.Categorical(np.where(a_cells, "Type A", "Type B"))
+    logged_run("summarize_findings")
+    narrative = "# R\n\n## Annotation\n{{table:clusters}}\n\n{{table:composition}}"
+
+    logged_run("check_markers", genes=["GENE0"])
+    assert report.unsupported_cell_types(adata, report.read_log(SESSION.paths.tool_log)) == ["Type B"]
+    result = logged_run("generate_report", report_markdown=narrative)
+    assert result["error"] == "report_rejected"
+    assert any("['Type B']" in p for p in result["problems"])
+
+    logged_run("check_markers", genes=["GENE30"])
+    result = logged_run("generate_report", report_markdown=narrative)
+    assert "error" not in result, result

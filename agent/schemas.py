@@ -59,8 +59,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "detect_doublets",
         "description": "Run Scrublet and report the doublet-score distribution plus candidate "
         "thresholds (bimodal valley, median+3*MAD, Scrublet automatic) and a recommendation. "
-        "Non-mutating. Inspect the distribution, then choose a threshold for filter_doublets.",
-        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "Non-mutating. Inspect the distribution, then choose a threshold for filter_doublets. "
+        "Scrublet runs separately within each 10x run: by default the detected batch column, "
+        "or name the column that marks runs, or null if all cells came from one run.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "batch_key": {
+                    "type": ["string", "null"],
+                    "description": "obs column marking separate 10x runs; omit for the detected batch "
+                    "column, null for a single run. Donors pooled into one run are not separate runs.",
+                },
+            },
+            "required": [],
+        },
     },
     {
         "name": "filter_doublets",
@@ -109,7 +121,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "batch_key": {"type": "string", "description": "obs column identifying batches to correct."},
+                "batch_key": {
+                    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                    "description": "obs column identifying batches to correct, or a list of columns "
+                    "combined into one batch per combination (e.g. ['donor', 'condition']).",
+                },
                 "max_epochs": {"type": "integer", "description": "Training epochs (default: scVI auto)."},
             },
             "required": [],
@@ -130,47 +146,171 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "identify_markers",
-        "description": "Rank marker genes per cluster (Wilcoxon) and return the top genes per "
-        "cluster, for interpreting cluster identity. Requires clustering first.",
+        "description": "Rank every gene as a marker for each cluster (Wilcoxon, cluster vs all "
+        "other cells) and return the top genes per cluster, for interpreting cluster identity. "
+        "The full ranking is kept for check_markers. Requires clustering first.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "n_genes": {"type": "integer", "description": "Top marker genes to return per cluster (default 10)."}
+                "n_genes": {"type": "integer", "description": "Top marker genes to return per cluster (default 25)."}
             },
             "required": [],
+        },
+    },
+    {
+        "name": "check_markers",
+        "description": "Look up specific genes in the full marker ranking: for each cluster, the "
+        "gene's rank among all genes, log2FC and padj vs all other cells, and % of cells "
+        "expressing it in and outside the cluster (low % = absent). Use it to confirm or rule "
+        "out canonical markers before accepting or changing a label. Requires identify_markers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "genes": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols, e.g. ['CD14', 'LYZ', 'CD68']."},
+                "clusters": {"type": "array", "items": {"type": "string"}, "description": "Clusters to report (default: all)."},
+            },
+            "required": ["genes"],
         },
     },
     {
         "name": "annotate_celltypes",
         "description": "Annotate cell types with CellTypist (majority voting over Leiden "
         "clusters). Returns per-cluster cell-type labels and overall counts. Requires "
-        "clustering first. Default model suits immune/PBMC data.",
+        "clustering first. Default model (Immune_All_Low.pkl, fine subtypes) suits immune/PBMC "
+        "data; Immune_All_High.pkl gives broad types. The other model's per-cluster labels are "
+        "returned as a second opinion to check the chosen labels against.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "model": {"type": "string", "description": "CellTypist model (default Immune_All_Low.pkl)."}
+                "model": {"type": "string", "description": "CellTypist model: Immune_All_Low.pkl (fine, default) or Immune_All_High.pkl (coarse)."}
             },
             "required": [],
+        },
+    },
+    {
+        "name": "relabel_clusters",
+        "description": "Override CellTypist's label for whole Leiden clusters when the marker "
+        "genes contradict it (e.g. cells unlike the reference). Give the marker evidence as the "
+        "reason. The original labels are kept and the change is shown in the report. Clears "
+        "composition and DE results, which must then be rerun. Run after annotate_celltypes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "labels": {
+                    "type": "object", "additionalProperties": {"type": "string"},
+                    "description": "Cluster ID -> new cell-type label, e.g. {'0': 'CD14+ monocytes'}.",
+                },
+                "reason": {"type": "string", "description": "The marker evidence for the new labels."},
+            },
+            "required": ["labels", "reason"],
+        },
+    },
+    {
+        "name": "compare_composition",
+        "description": "Compare cell-type proportions between two conditions across replicate "
+        "samples (e.g. donors). Proportions are computed per sample; the test is paired "
+        "(Wilcoxon signed-rank) when every sample has both conditions, else Mann-Whitney U, with "
+        "Benjamini-Hochberg correction. Refuses with too few samples per condition. Run after "
+        "annotate_celltypes. Non-mutating.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contrast": {
+                    "type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3,
+                    "description": "[condition_column, test_level, reference_level], e.g. ['condition', 'stim', 'ctrl'].",
+                },
+                "sample_key": {"type": "string", "description": "obs column identifying replicates, e.g. 'donor'."},
+                "celltype_key": {"type": "string", "description": "obs column with cell types (default 'cell_type')."},
+            },
+            "required": ["contrast", "sample_key"],
+        },
+    },
+    {
+        "name": "run_pseudobulk_de",
+        "description": "Pseudobulk differential expression per cell type with PyDESeq2 (Wald "
+        "test). Raw counts are summed per sample (sample_key x condition) within each cell "
+        "type; design = ~ covariates + factor. Put the replicate column (e.g. 'donor') in "
+        "covariates for a paired design when each replicate has both conditions. Refuses "
+        "confounded designs and covariates that vary within a sample; skips cell types with "
+        "fewer than 2 samples per condition, and says why. Run after annotate_celltypes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contrast": {
+                    "type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3,
+                    "description": "[factor, test_level, reference_level], e.g. ['condition', 'stim', 'ctrl'].",
+                },
+                "sample_key": {"type": "string", "description": "obs column identifying replicates, e.g. 'donor'."},
+                "covariates": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Categorical columns to adjust for, e.g. ['donor'] (paired) or ['batch'].",
+                },
+                "celltype_key": {"type": "string", "description": "obs column with cell types (default 'cell_type')."},
+                "cell_types": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Cell types to test (default: all).",
+                },
+                "min_cells": {
+                    "type": "integer",
+                    "description": "Minimum cells for a sample to enter a cell type's pseudobulk (default 10).",
+                },
+            },
+            "required": ["contrast", "sample_key"],
+        },
+    },
+    {
+        "name": "get_top_genes",
+        "description": "Top significant DE genes for one tested cell type, ranked by padj then "
+        "|log2FC|. Requires run_pseudobulk_de.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cell_type": {"type": "string", "description": "A cell type tested by run_pseudobulk_de."},
+                "n": {"type": "integer", "description": "Number of genes (default 20)."},
+                "direction": {"type": "string", "enum": ["up", "down", "both"], "description": "Default 'both'."},
+            },
+            "required": ["cell_type"],
+        },
+    },
+    {
+        "name": "query_genes",
+        "description": "log2FC and padj for specific genes in each tested cell type. Use it to "
+        "check a gene before writing about it. Requires run_pseudobulk_de.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "genes": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols."},
+                "cell_types": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Cell types to report (default: all tested).",
+                },
+            },
+            "required": ["genes"],
         },
     },
     {
         "name": "summarize_findings",
         "description": "Consolidate the final analysis state (cell counts, cluster-to-"
         "cell-type mapping, top markers, cell-type counts) into one factual summary to write "
-        "the report from. Non-mutating.",
+        "the report from. Also returns 'facts' (placeholder names with their current values, "
+        "for {{name}} in the report) and the tables available as {{table:name}}. Non-mutating.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "generate_report",
-        "description": "Render UMAP and QC figures, write the annotated .h5ad, and assemble "
-        "the final Markdown report. Provide the report narrative as report_markdown; the tool "
-        "adds the figures. Call this last.",
+        "description": "Write the final Markdown report. Never type a number: use {{fact}}, "
+        "{{celltype:NAME}}, {{celltypes:A|B}} and {{table:name}} placeholders, which the tool "
+        "fills in. Every cell type needs a marker you checked with check_markers that is "
+        "enriched in it. Any problem rejects the whole report with a list of all issues; fix them "
+        "all and resubmit. The tool adds the decisions table, captioned figures and Methods, "
+        "and writes the annotated .h5ad. Call this last.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "report_markdown": {
                     "type": "string",
-                    "description": "The full analysis report as Markdown, written by you from the findings.",
+                    "description": "The full analysis report as Markdown, written by you from "
+                    "the findings, with placeholders in place of every number.",
                 }
             },
             "required": ["report_markdown"],
@@ -192,7 +332,13 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "run_scvi": tools.run_scvi,
     "cluster": tools.cluster,
     "identify_markers": tools.identify_markers,
+    "check_markers": tools.check_markers,
     "annotate_celltypes": tools.annotate_celltypes,
+    "relabel_clusters": tools.relabel_clusters,
+    "compare_composition": tools.compare_composition,
+    "run_pseudobulk_de": tools.run_pseudobulk_de,
+    "get_top_genes": tools.get_top_genes,
+    "query_genes": tools.query_genes,
     "summarize_findings": tools.summarize_findings,
     "generate_report": tools.generate_report,
 }

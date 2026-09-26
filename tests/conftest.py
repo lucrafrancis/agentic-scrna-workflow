@@ -75,3 +75,32 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "outputs")
     SESSION.__init__()
     yield
+
+
+@pytest.fixture
+def logged_run(synthetic_h5ad):
+    """Run the pipeline up to the report with every call dispatched and logged by the loop,
+    as in a real run, so report code that reads tool_calls.jsonl sees a real log. Returns
+    the `call` helper for further tool calls."""
+    from agent.loop import _log_tool_call, _run_tool
+
+    SESSION.load(synthetic_h5ad)
+    SESSION.begin_run()
+
+    def call(name, **args):
+        summary = _run_tool(name, args)
+        _log_tool_call(name, args, summary)
+        return summary
+
+    call("inspect_dataset")
+    call("check_gene_identifiers")
+    call("compute_qc")
+    call("recommend_qc_thresholds")
+    call("filter_cells_and_genes", min_genes=5, max_pct_mt=90, min_cells=1)
+    threshold = call("detect_doublets")["recommended_threshold"]
+    call("filter_doublets", threshold=threshold)
+    call("normalize", n_top_genes=50)
+    call("run_pca", n_comps=10)
+    call("cluster", resolution=1.0)
+    call("identify_markers", n_genes=5)
+    return call
