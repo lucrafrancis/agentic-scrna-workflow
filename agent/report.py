@@ -876,8 +876,9 @@ def methods(log: list[Entry]) -> str:
         software,
         "### Reproducibility",
         f"Random seed {config.SEED} for all stochastic steps. Every tool call, with the arguments the agent "
-        "chose and the summary it read back, is in `tool_calls.jsonl`. The agent's choices are sampled from the "
-        "model, so a re-run can take different decisions.",
+        "chose and the summary it read back, is in `tool_calls.jsonl`. `replay.py` re-runs those calls without "
+        "the model, reproducing this analysis; running the agent again samples new choices from the model, so "
+        "it can take different decisions.",
     ])
 
 
