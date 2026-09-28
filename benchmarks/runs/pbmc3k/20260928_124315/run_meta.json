@@ -1,0 +1,12 @@
+{
+  "run_id": "20260928_124315",
+  "dataset": "pbmc3k",
+  "prompt": "prompts/pbmc3k.txt",
+  "model": "claude-sonnet-5",
+  "git_commit": "52f5efd",
+  "agent_code_modified": false,
+  "started": "2026-09-28T12:43:15",
+  "wall_time_s": 139.0,
+  "exit_code": 0,
+  "report_written": true
+}

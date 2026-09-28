@@ -1,0 +1,1 @@
+{"model": "claude-sonnet-5", "requests": 16, "input_tokens": 32, "cache_creation_input_tokens": 33761, "cache_read_input_tokens": 212380, "output_tokens": 11842, "estimated_cost_usd": 0.2454}
