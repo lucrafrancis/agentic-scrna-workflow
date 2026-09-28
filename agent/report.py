@@ -158,6 +158,10 @@ def decisions_table(log: list[Entry]) -> str:
             f"**{_num(t)}**" + (f" ({rule})" if rule else " (custom)"),
             f"{_n(dfilt['summary']['removed'])} cells removed ({_num(dfilt['summary']['pct_removed'])}%)",
         ))
+    elif det:
+        rows.append(("Doublet threshold", "Scrublet automatic", "scores computed", "**skipped** (no filter)", "0 cells removed"))
+    else:
+        rows.append(("Doublet threshold", "Scrublet automatic", "—", "**skipped** (not run)", "0 cells removed"))
 
     norm = _last(log, "normalize")
     if norm:
