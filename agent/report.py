@@ -372,8 +372,8 @@ def _condition_column() -> str | None:
     return None
 
 
-def _umap_panel(adata, column: str, title: str, path: Path, size: float = 6.0) -> None:
-    """One square UMAP coloured by `column`, legend underneath, for posters and slides.
+def _umap_panel(adata, column: str, title: str, path: Path, size: float = 5.0) -> None:
+    """One UMAP coloured by `column`, for posters and slides: a square plot, legend on the right.
 
     Not placed in the report (umap.png shows every colouring there). Cells are drawn in a
     fixed random order so no group is hidden under another, e.g. stim drawn over ctrl.
@@ -389,25 +389,17 @@ def _umap_panel(adata, column: str, title: str, path: Path, size: float = 6.0) -
     xy = adata.obsm["X_umap"][order]
     codes = cats.cat.codes.to_numpy()[order]
 
-    longest = max(len(n) for n in names)
-    ncol = 1 if longest > 30 else 2 if longest > 12 else 4 if longest > 3 else 6
-    rows = -(-len(names) // ncol)
-    legend_h = 0.22 * rows + 0.15  # inches
-    title_h, pad = 0.45, 0.15
-    side = size - title_h - legend_h - 2 * pad
-
     with _style():
-        fig = plt.figure(figsize=(size, size))
-        ax = fig.add_axes([(size - side) / 2 / size, (legend_h + pad) / size, side / size, side / size])
+        fig, ax = plt.subplots(figsize=(size, size))
+        ax.set_box_aspect(1)  # the plot area is square; the image widens to fit the legend
         ax.scatter(xy[:, 0], xy[:, 1], c=[colors[k] for k in codes], s=min(12.0, 30000 / adata.n_obs),
                    linewidths=0, rasterized=True)
         ax.set_axis_off()
-        fig.text(0.5, 1 - (pad + title_h / 2) / size, title, ha="center", va="center",
-                 fontsize=13, fontweight="bold", color=INK)
+        ax.set_title(title, fontsize=13, color=INK)
         handles = [plt.Line2D([], [], marker="o", linestyle="", markersize=7, color=col) for col in colors]
-        fig.legend(handles, names, loc="lower center", bbox_to_anchor=(0.5, pad / size / 2), ncol=ncol,
-                   fontsize=9, handletextpad=0.3, columnspacing=1.2, labelspacing=0.35)
-        fig.savefig(path, dpi=300, facecolor="white")
+        ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=2 if len(names) > 14 else 1,
+                  fontsize=9, handletextpad=0.3, columnspacing=1.2, labelspacing=0.4)
+        fig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
 
