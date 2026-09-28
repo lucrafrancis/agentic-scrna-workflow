@@ -15,6 +15,7 @@ from pathlib import Path
 
 from agent import config
 from agent.loop import run_agent
+from agent.replay import write_replay_script
 from agent.session import SESSION
 
 
@@ -41,6 +42,9 @@ def main(prompt_file: str) -> None:
     shutil.copyfile(prompt_file, SESSION.paths.dir / "prompt.txt")
 
     run_agent(prompt + "\n\nInspect the dataset first, then proceed through an appropriate analysis.")
+    # replay.py re-runs the successful tool calls without the LLM (see agent/replay.py).
+    if replay := write_replay_script(SESSION.paths.dir, h5ad_path):
+        print(f"Replay script: {replay}")
     if SESSION.paths.report.exists():
         print(f"Done. Report: {SESSION.paths.report}")
     else:

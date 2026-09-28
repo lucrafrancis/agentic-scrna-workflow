@@ -9,6 +9,7 @@ scoring needs from outputs/<dataset>/ into benchmarks/runs/<dataset>/<run_id>/:
     report.md          the agent's report
     prompt.txt         what the agent was asked
     usage.jsonl        tokens and estimated cost
+    replay.py          re-runs the tool calls without the LLM
     labels.csv         per cell: barcode, Leiden cluster, final label, CellTypist label
     run_meta.json      model, git commit, start time, wall time, exit code
 
@@ -35,7 +36,7 @@ from agent import config  # noqa: E402
 from run import dataset_path  # noqa: E402
 
 RUNS_DIR = ROOT / "benchmarks" / "runs"
-COPIED = ("tool_calls.jsonl", "report.md", "prompt.txt", "usage.jsonl")
+COPIED = ("tool_calls.jsonl", "report.md", "prompt.txt", "usage.jsonl", "replay.py")
 
 
 def _git(*args: str) -> str:
