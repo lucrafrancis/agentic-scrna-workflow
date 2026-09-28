@@ -1,0 +1,6 @@
+run_id,embedding,annotation_model,mito_cutoff,doublet_threshold,pct_doublets_removed,n_clusters,n_cell_types,n_relabelled,cells_scored,pct_removed,accuracy,ari,report_attempts,cost_usd,runtime_s
+20260928_125139,scVI,Immune_All_Low,5.0,0.6482692445451002,0.02,16,14,4,24558 of 24673,0.5,86.4,0.731,3,0.7776,1266.6
+20260928_131246,scVI,Immune_All_Low,5.0,0.6482692445451002,0.02,16,14,4,24558 of 24673,0.5,86.4,0.731,3,0.79,1192.8
+20260928_133239,scVI,Immune_All_Low,5.0,0.6482692445451002,0.02,16,14,4,24558 of 24673,0.5,86.4,0.731,2,0.6815,1186.1
+20260928_135226,scVI,Immune_All_Low,5.0,0.6482692445451002,0.02,16,14,4,24558 of 24673,0.5,86.4,0.731,2,0.6713,1187.6
+20260928_141214,scVI,Immune_All_Low,5.0,0.6482692445451002,0.02,16,14,4,24558 of 24673,0.5,86.4,0.731,2,0.591,1103.0
