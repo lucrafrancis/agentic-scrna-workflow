@@ -501,6 +501,8 @@ def _slug(name: str) -> str:
 
 
 REF_COLOR, TEST_COLOR = "#2a78d6", "#eb6834"
+# Volcano plots: significant up red, significant down blue, the rest grey.
+UP_COLOR, DOWN_COLOR, NS_COLOR = "#d62728", "#2a78d6", "#c8c8c8"
 
 
 def _composition_change_figure(figdir: Path) -> Figure | None:
@@ -556,9 +558,9 @@ def _draw_volcano(ax, res: pd.DataFrame, title: str, point: float, label_size: f
     y = -np.log10(res["padj"].clip(lower=1e-300))
     up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
     down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
-    ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=point, color=DATA, linewidths=0, rasterized=True)
-    ax.scatter(res["log2FoldChange"][down], y[down], s=point * 1.3, color=REF_COLOR, linewidths=0, rasterized=True)
-    ax.scatter(res["log2FoldChange"][up], y[up], s=point * 1.3, color=TEST_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=point, color=NS_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][down], y[down], s=point * 1.3, color=DOWN_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][up], y[up], s=point * 1.3, color=UP_COLOR, linewidths=0, rasterized=True)
     right_edge = res["log2FoldChange"].quantile(0.999)
     for k, gene in enumerate(res[up].sort_values("padj").index[:n_labels]):
         # Staggered offsets keep labels of near-identical points apart; a leader line ties each
@@ -601,7 +603,7 @@ def _volcano_figure(figdir: Path) -> Figure | None:
             fig.savefig(figdir / f"volcano_{_slug(ct)}.png", dpi=300, facecolor="white")
             plt.close(fig)
     caption = (f"Pseudobulk differential expression, {test} vs {ref}, per cell type (PyDESeq2, design "
-               f"`{st['design']}`, Wald test). Orange: up in {test}; blue: down (padj < 0.05). The three most "
+               f"`{st['design']}`, Wald test). Red: up in {test}; blue: down (padj < 0.05); grey: not significant. The three most "
                "significant up-regulated genes are labelled.")
     if st["skipped"]:
         caption += " Not tested (too few samples): " + ", ".join(st["skipped"]) + "."
