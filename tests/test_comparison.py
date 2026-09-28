@@ -79,6 +79,8 @@ def test_run_pseudobulk_de(two_condition_h5ad):
     assert "| Type A | 4 / 4 |" in text
     SESSION.paths.figures.mkdir(parents=True)
     assert report._volcano_figure(SESSION.paths.figures) is not None
+    for name in ("volcano_type_a.png", "volcano_type_b.png"):  # one per cell type
+        assert (SESSION.paths.figures / name).exists()
 
     # Guardrails: a covariate identical to the condition is confounded; the condition can't
     # be a covariate; unknown levels are refused.

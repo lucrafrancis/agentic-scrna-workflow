@@ -546,6 +546,34 @@ def _composition_change_figure(figdir: Path) -> Figure | None:
                   (r"abundance|proportion|composition (change|analysis|test|shift)", r"composition"))
 
 
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _draw_volcano(ax, res: pd.DataFrame, title: str, point: float, label_size: float, title_size: float,
+                  axis_size: float, n_labels: int = 3) -> None:
+    res = res.dropna(subset=["padj"])
+    y = -np.log10(res["padj"].clip(lower=1e-300))
+    up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
+    down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
+    ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=point, color=DATA, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][down], y[down], s=point * 1.3, color=REF_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][up], y[up], s=point * 1.3, color=TEST_COLOR, linewidths=0, rasterized=True)
+    right_edge = res["log2FoldChange"].quantile(0.999)
+    for k, gene in enumerate(res[up].sort_values("padj").index[:n_labels]):
+        # Staggered offsets keep labels of near-identical points apart; a leader line ties each
+        # label to its point. Labels near the right edge go to the left of their point.
+        x = res.loc[gene, "log2FoldChange"]
+        left = x > 0.7 * right_edge
+        ax.annotate(gene, (x, y[gene]), fontsize=label_size, color=INK,
+                    xytext=(-8 if left else 8, -1.3 * label_size * k), textcoords="offset points",
+                    ha="right" if left else "left", va="center",
+                    arrowprops={"arrowstyle": "-", "color": INK, "linewidth": 0.6, "shrinkA": 0, "shrinkB": 2})
+    ax.set_title(f"{title}\n{int(up.sum())} up, {int(down.sum())} down", fontsize=title_size)
+    ax.set_xlabel("log2 fold change", fontsize=axis_size)
+    ax.set_ylabel("-log10 padj", fontsize=axis_size)
+
+
 def _volcano_figure(figdir: Path) -> Figure | None:
     import matplotlib.pyplot as plt
 
@@ -553,30 +581,25 @@ def _volcano_figure(figdir: Path) -> Figure | None:
     if not results or st is None:
         return None
     cts = list(results)
+    factor, test, ref = st["contrast"]
     ncol = min(4, len(cts))
     nrow = int(np.ceil(len(cts) / ncol))
     with _style():
         fig, axes = plt.subplots(nrow, ncol, figsize=(3.2 * ncol, 3.0 * nrow), squeeze=False)
         for ax, ct in zip(axes.flat, cts):
-            res = results[ct].dropna(subset=["padj"])
-            y = -np.log10(res["padj"].clip(lower=1e-300))
-            up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
-            down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
-            ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=3, color=DATA, rasterized=True)
-            ax.scatter(res["log2FoldChange"][down], y[down], s=4, color=REF_COLOR, rasterized=True)
-            ax.scatter(res["log2FoldChange"][up], y[up], s=4, color=TEST_COLOR, rasterized=True)
-            for k, gene in enumerate(res[up].sort_values("padj").index[:3]):
-                # Staggered offsets keep labels of near-identical points apart.
-                ax.annotate(gene, (res.loc[gene, "log2FoldChange"], y[gene]), fontsize=7, color=INK,
-                            xytext=(4, -9 * k), textcoords="offset points")
-            ax.set_title(f"{ct}\n{int(up.sum())} up, {int(down.sum())} down", fontsize=9)
-            ax.set_xlabel("log2 fold change", fontsize=8)
-            ax.set_ylabel("-log10 padj", fontsize=8)
+            _draw_volcano(ax, results[ct], ct, point=3, label_size=7, title_size=9, axis_size=8)
         for ax in list(axes.flat)[len(cts):]:
             ax.axis("off")
         fig.tight_layout()
         _save(fig, figdir / "de_volcano.png")
-    factor, test, ref = st["contrast"]
+        # One square volcano per cell type, for posters and slides; not placed in the report.
+        for ct in cts:
+            fig, ax = plt.subplots(figsize=(6, 6))
+            _draw_volcano(ax, results[ct], f"{ct}: {test} vs {ref}", point=8, label_size=11, title_size=13,
+                          axis_size=11, n_labels=5)
+            fig.tight_layout()
+            fig.savefig(figdir / f"volcano_{_slug(ct)}.png", dpi=300, facecolor="white")
+            plt.close(fig)
     caption = (f"Pseudobulk differential expression, {test} vs {ref}, per cell type (PyDESeq2, design "
                f"`{st['design']}`, Wald test). Orange: up in {test}; blue: down (padj < 0.05). The three most "
                "significant up-regulated genes are labelled.")
