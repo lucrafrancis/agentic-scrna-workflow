@@ -158,6 +158,10 @@ def decisions_table(log: list[Entry]) -> str:
             f"**{_num(t)}**" + (f" ({rule})" if rule else " (custom)"),
             f"{_n(dfilt['summary']['removed'])} cells removed ({_num(dfilt['summary']['pct_removed'])}%)",
         ))
+    elif det:
+        rows.append(("Doublet threshold", "Scrublet automatic", "scores computed", "**skipped** (no filter)", "0 cells removed"))
+    else:
+        rows.append(("Doublet threshold", "Scrublet automatic", "—", "**skipped** (not run)", "0 cells removed"))
 
     norm = _last(log, "normalize")
     if norm:
@@ -368,6 +372,38 @@ def _condition_column() -> str | None:
     return None
 
 
+def _umap_panel(adata, column: str, path: Path, size: float = 5.0) -> None:
+    """One UMAP coloured by `column` and titled with it, for posters and slides: a square plot,
+    legend on the right.
+
+    Not placed in the report (umap.png shows every colouring there). Cells are drawn in a
+    fixed random order so no group is hidden under another, e.g. stim drawn over ctrl.
+    """
+    import matplotlib.pyplot as plt
+
+    cats = adata.obs[column].astype("category")
+    names = [str(n) for n in cats.cat.categories]
+    colors = list(adata.uns.get(f"{column}_colors", []))
+    if len(colors) != len(names):
+        colors = [plt.cm.tab20(i % 20) for i in range(len(names))]
+    order = np.random.default_rng(0).permutation(adata.n_obs)
+    xy = adata.obsm["X_umap"][order]
+    codes = cats.cat.codes.to_numpy()[order]
+
+    with _style():
+        fig, ax = plt.subplots(figsize=(size, size))
+        ax.set_box_aspect(1)  # the plot area is square; the image widens to fit the legend
+        ax.scatter(xy[:, 0], xy[:, 1], c=[colors[k] for k in codes], s=min(12.0, 30000 / adata.n_obs),
+                   linewidths=0, rasterized=True)
+        ax.set_axis_off()
+        ax.set_title(column, fontsize=13, color=INK)
+        handles = [plt.Line2D([], [], marker="o", linestyle="", markersize=7, color=col) for col in colors]
+        ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=2 if len(names) > 14 else 1,
+                  fontsize=9, handletextpad=0.3, columnspacing=1.2, labelspacing=0.4)
+        fig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+
 def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
     import matplotlib.pyplot as plt
     import scanpy as sc
@@ -391,6 +427,8 @@ def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
         sc.pl.umap(adata, color=colors, title=[titles[c] for c in colors], show=False, wspace=0.45,
                    frameon=False, legend_fontsize=8, ncols=2 if len(colors) > 3 else 4)
         _save(plt.gcf(), figdir / "umap.png")
+        for c in colors:
+            _umap_panel(adata, c, figdir / f"umap_{c}.png")
     rep = {"X_scVI": "the scVI latent space", "X_pca": "PCA"}.get(SESSION.representation, SESSION.representation)
     names = [titles[c] if c == "leiden" else titles[c].lower() for c in colors]
     by = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -456,6 +494,8 @@ def _slug(name: str) -> str:
 
 
 REF_COLOR, TEST_COLOR = "#2a78d6", "#eb6834"
+# Volcano plots: significant up red, significant down blue, the rest grey.
+UP_COLOR, DOWN_COLOR, NS_COLOR = "#d62728", "#2a78d6", "#c8c8c8"
 
 
 def _composition_change_figure(figdir: Path) -> Figure | None:
@@ -501,6 +541,34 @@ def _composition_change_figure(figdir: Path) -> Figure | None:
                   (r"abundance|proportion|composition (change|analysis|test|shift)", r"composition"))
 
 
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _draw_volcano(ax, res: pd.DataFrame, title: str, point: float, label_size: float, title_size: float,
+                  axis_size: float, n_labels: int = 3) -> None:
+    res = res.dropna(subset=["padj"])
+    y = -np.log10(res["padj"].clip(lower=1e-300))
+    up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
+    down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
+    ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=point, color=NS_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][down], y[down], s=point * 1.3, color=DOWN_COLOR, linewidths=0, rasterized=True)
+    ax.scatter(res["log2FoldChange"][up], y[up], s=point * 1.3, color=UP_COLOR, linewidths=0, rasterized=True)
+    right_edge = res["log2FoldChange"].quantile(0.999)
+    for k, gene in enumerate(res[up].sort_values("padj").index[:n_labels]):
+        # Staggered offsets keep labels of near-identical points apart; a leader line ties each
+        # label to its point. Labels near the right edge go to the left of their point.
+        x = res.loc[gene, "log2FoldChange"]
+        left = x > 0.7 * right_edge
+        ax.annotate(gene, (x, y[gene]), fontsize=label_size, color=INK,
+                    xytext=(-8 if left else 8, -1.3 * label_size * k), textcoords="offset points",
+                    ha="right" if left else "left", va="center",
+                    arrowprops={"arrowstyle": "-", "color": INK, "linewidth": 0.6, "shrinkA": 0, "shrinkB": 2})
+    ax.set_title(f"{title}\n{int(up.sum())} up, {int(down.sum())} down", fontsize=title_size)
+    ax.set_xlabel("log2 fold change", fontsize=axis_size)
+    ax.set_ylabel("-log10 padj", fontsize=axis_size)
+
+
 def _volcano_figure(figdir: Path) -> Figure | None:
     import matplotlib.pyplot as plt
 
@@ -508,32 +576,27 @@ def _volcano_figure(figdir: Path) -> Figure | None:
     if not results or st is None:
         return None
     cts = list(results)
+    factor, test, ref = st["contrast"]
     ncol = min(4, len(cts))
     nrow = int(np.ceil(len(cts) / ncol))
     with _style():
         fig, axes = plt.subplots(nrow, ncol, figsize=(3.2 * ncol, 3.0 * nrow), squeeze=False)
         for ax, ct in zip(axes.flat, cts):
-            res = results[ct].dropna(subset=["padj"])
-            y = -np.log10(res["padj"].clip(lower=1e-300))
-            up = (res["padj"] < 0.05) & (res["log2FoldChange"] > 0)
-            down = (res["padj"] < 0.05) & (res["log2FoldChange"] < 0)
-            ax.scatter(res["log2FoldChange"][~(up | down)], y[~(up | down)], s=3, color=DATA, rasterized=True)
-            ax.scatter(res["log2FoldChange"][down], y[down], s=4, color=REF_COLOR, rasterized=True)
-            ax.scatter(res["log2FoldChange"][up], y[up], s=4, color=TEST_COLOR, rasterized=True)
-            for k, gene in enumerate(res[up].sort_values("padj").index[:3]):
-                # Staggered offsets keep labels of near-identical points apart.
-                ax.annotate(gene, (res.loc[gene, "log2FoldChange"], y[gene]), fontsize=7, color=INK,
-                            xytext=(4, -9 * k), textcoords="offset points")
-            ax.set_title(f"{ct}\n{int(up.sum())} up, {int(down.sum())} down", fontsize=9)
-            ax.set_xlabel("log2 fold change", fontsize=8)
-            ax.set_ylabel("-log10 padj", fontsize=8)
+            _draw_volcano(ax, results[ct], ct, point=3, label_size=7, title_size=9, axis_size=8)
         for ax in list(axes.flat)[len(cts):]:
             ax.axis("off")
         fig.tight_layout()
         _save(fig, figdir / "de_volcano.png")
-    factor, test, ref = st["contrast"]
+        # One square volcano per cell type, for posters and slides; not placed in the report.
+        for ct in cts:
+            fig, ax = plt.subplots(figsize=(6, 6))
+            _draw_volcano(ax, results[ct], f"{ct}: {test} vs {ref}", point=8, label_size=11, title_size=13,
+                          axis_size=11, n_labels=5)
+            fig.tight_layout()
+            fig.savefig(figdir / f"volcano_{_slug(ct)}.png", dpi=300, facecolor="white")
+            plt.close(fig)
     caption = (f"Pseudobulk differential expression, {test} vs {ref}, per cell type (PyDESeq2, design "
-               f"`{st['design']}`, Wald test). Orange: up in {test}; blue: down (padj < 0.05). The three most "
+               f"`{st['design']}`, Wald test). Red: up in {test}; blue: down (padj < 0.05); grey: not significant. The three most "
                "significant up-regulated genes are labelled.")
     if st["skipped"]:
         caption += " Not tested (too few samples): " + ", ".join(st["skipped"]) + "."
@@ -806,8 +869,9 @@ def methods(log: list[Entry]) -> str:
         software,
         "### Reproducibility",
         f"Random seed {config.SEED} for all stochastic steps. Every tool call, with the arguments the agent "
-        "chose and the summary it read back, is in `tool_calls.jsonl`. The agent's choices are sampled from the "
-        "model, so a re-run can take different decisions.",
+        "chose and the summary it read back, is in `tool_calls.jsonl`. `replay.py` re-runs those calls without "
+        "the model, reproducing this analysis; running the agent again samples new choices from the model, so "
+        "it can take different decisions.",
     ])
 
 

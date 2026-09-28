@@ -44,6 +44,7 @@ def test_pipeline_end_to_end(synthetic_h5ad):
     assert SESSION.paths.report.exists()
     assert SESSION.paths.annotated.exists()
     assert (SESSION.paths.figures / "umap.png").exists()
+    assert (SESSION.paths.figures / "umap_leiden.png").exists()  # one square UMAP per colouring
 
 
 def test_mito_genes_found_in_qc(synthetic_h5ad):

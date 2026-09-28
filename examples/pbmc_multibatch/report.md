@@ -4,7 +4,7 @@
 
 ## Overview
 
-PBMCs from two independent 10x runs (PBMC5k and PBMC10k, `2` batches under obs column `batch`) were combined into one object of `4,000` cells x `15,792` genes and taken from raw counts to annotated cell types. Because the two runs are a technical grouping rather than a biological condition, batch correction was used purely to align cell types for clustering/annotation, while raw counts were preserved throughout.
+This dataset combines PBMCs from two separate 10x runs (PBMC5k and PBMC10k) into one object of 4,000 cells x 15,792 genes, provided as raw counts with human gene symbols. Because the two runs are a genuine technical batch factor (different chip lanes/reagent lots run at different times), batch identity was treated as a covariate to correct for during integration rather than ignored.
 
 ## Key analysis decisions
 
@@ -19,13 +19,13 @@ Each row compares a standard default with what the agent chose after reading the
 | Embedding | PCA | 2 batches in `obs['batch']` | **scVI**, correcting for batch | 10 latent dimensions, 2 batches |
 | Leiden resolution | 1.0 | — | 1.0 (default kept) | 13 clusters |
 | Annotation model | Immune_All_Low | — | Immune_All_Low (default kept) | 11 cell types |
-| Cluster labels | CellTypist majority vote | Cluster 8 (24 cells) was labeled 'Tcm/Naive helper T cells' by CellTypist, but check_markers shows CD3D and CD3E are not significantly enriched (padj=1.0, ~46% pct in cluster vs ~46-53% elsewhere) and CD14/MS4A1/NKG7 are also non-significant/absent. Its actual top markers are MALAT1, JUN, FOSB, IER2, BTG1 and a stack of mitochondrial transcripts (MT-CO1, MT-ATP6, MT-ND5, MT-CYB, MT-CO3, MT-ND1), a stress/immediate-early signature rather than any lineage program, so it is better labeled a low-quality/stressed population than a T-cell subset. | cluster 8: Tcm/Naive helper T cells → **Low-quality/stressed cells** | 24 cells relabelled |
+| Cluster labels | CellTypist majority vote | Cluster 8 (24 cells) was labeled 'Tcm/Naive helper T cells' by CellTypist, but canonical T-cell markers are not enriched: CD3D (padj=1.0, 45.8% in vs 45.7% elsewhere), CD3E (padj=1.0), IL7R (padj=1.0), CCR7 (padj=1.0), and SELL is actually depleted (log2FC=-2.44, padj=0.016). Instead its top-ranked genes are MALAT1, JUN, and a long list of mitochondrial transcripts (MT-CO1, MT-ATP6, MT-ND5, MT-CYB, MT-ND4, MT-CO3, MT-CO2, MT-ND1) plus MTRNR2L12, a classic signature of stressed/damaged cells rather than a genuine lineage. No lineage marker (CD14, CD3, CD79A/MS4A1, GNLY) is enriched here. | cluster 8: Tcm/Naive helper T cells → **Low-quality/stressed cells** | 24 cells relabelled |
 
 ## Quality control
 
-Gene identifiers were confirmed as human gene symbols with a `MT-` mitochondrial prefix (`13` mitochondrial genes detected), so mitochondrial QC metrics are reliable.
+Mitochondrial genes were identified via the `MT-` prefix (13 genes). The per-cell QC distributions showed a notably right-shifted mitochondrial fraction for this dataset (median 6.93%, p95 12.2%, p99 16.8%, max 20%) compared to the tutorial-default cutoff of 5%. Applying that default would have discarded 3,291 cells (82.3% of the dataset) — clearly disproportionate, and consistent with a global shift in mito content rather than a distinct population of dying cells.
 
-The mitochondrial fraction in this dataset runs noticeably higher than a typical tutorial PBMC sample: median `6.93%`, p75 `8.6%`, p95 `12.2%`, max `20%`. Applying the tutorial-default cap of `5%` would have discarded `3,291` cells (`82.3%` of the dataset) — clearly excessive and indicative of a shifted baseline rather than widespread cell damage. I instead used a permissive cap of `15%`, which trims only the true high-mito outlier tail while keeping the bulk of the biologically real population. The gene-count floor (`200`) removed no cells on its own, since the empirical minimum (`264` genes/cell) already exceeds it — this dataset had no very-low-complexity droplets to begin with. Combined cell filtering removed `73` cells (`1.8%`), and the gene floor (`3` cells/gene) removed `90` lowly-detected genes.
+Instead, a max mitochondrial threshold of 15% was used, trimming only the extreme tail while retaining the bulk of the distribution. Combined with the standard minimum-genes-per-cell floor (200) — which removed no additional cells since the lowest cell already had 264 genes detected — and a minimum-cells-per-gene filter (3), this removed 73 cells (1.8%) and 90 lowly-detected genes, leaving 3,927 cells x 15,702 genes.
 
 ![QC distributions with cutoffs](figures/qc_thresholds.png)
 
@@ -33,7 +33,7 @@ The mitochondrial fraction in this dataset runs noticeably higher than a typical
 
 ## Doublet detection
 
-Scrublet was run separately within each 10x run; the pooled score distribution was `not bimodal`, i.e. no clean bimodal valley to split on. Following the standard rule for data without prior doublet removal, I used median + 3xMAD (`0.09`), which sits well below either run's Scrublet automatic threshold (`0.404 / 0.397`) and flags a plausible `9.27%` of cells as doublets — in line with expected multiplet rates for standard (non-hashed, non-demultiplexed) 10x loading. This removed `364` cells, leaving `3,563`.
+Scrublet was run separately per 10x run (batch key `batch`) since doublet rates and score scales are run-specific. The combined score distribution was not bimodal, so the standard median + 3xMAD rule was used rather than a bimodal valley, giving a threshold of 0.09 (median 0.0384, max observed 0.465). This flagged and removed 364 cells (9.27%), leaving 3,563 cells. There was no indication in the task description that doublets had already been removed upstream (e.g. by hashing or genotype demultiplexing), so the standard rule — rather than the lighter-touch Scrublet-automatic threshold — was appropriate here.
 
 ![Doublet score distribution](figures/doublet_scores.png)
 
@@ -41,11 +41,11 @@ Scrublet was run separately within each 10x run; the pooled score distribution w
 
 ## Dimensionality reduction
 
-The two 10x runs are a genuine technical batch (separate captures/libraries), so I used scVI (batch key = `batch`, `10`-dim latent space, `400` epochs) rather than plain PCA. This lets clustering and UMAP reflect shared cell-type structure across runs instead of run-of-origin, while leaving raw counts untouched for any downstream expression analysis.
+The dataset has 2 batches from two independent 10x runs, a technical grouping rather than a biological condition. Since a real batch effect between separate sequencing runs is expected (loading, capture efficiency, ambient RNA differences), scVI was used with `batch` as the correction key to learn a joint latent embedding (10 latent dimensions, 400 training epochs on 2,000 HVGs) rather than plain PCA, which would leave run-driven variation uncorrected in the neighbor graph and could split shared cell types by batch. Raw counts were preserved throughout for downstream marker testing.
 
 ## Clustering
 
-Leiden clustering on the scVI embedding (resolution `1.0`) yielded `13` clusters, ranging from `23` to `712` cells (see cluster table).
+Leiden clustering on the scVI latent space (resolution 1.0) produced 13 clusters ranging from 23 to 712 cells. 
 
 | Cluster | Cells | Top marker genes | Cell type | CellTypist label |
 |---|---|---|---|---|
@@ -69,18 +69,22 @@ Leiden clustering on the scVI embedding (resolution `1.0`) yielded `13` clusters
 
 ## Cell-type annotation
 
-CellTypist (Immune_All_Low.pkl, majority-voted per cluster) was used for initial labels, cross-checked against the coarser Immune_All_High.pkl model and against canonical markers verified with `check_markers` (rank among all genes, log2FC, padj, and % expressing in vs. outside the cluster).
+CellTypist (Immune_All_Low.pkl, majority vote per cluster) provided initial labels, cross-checked against the coarser Immune_All_High.pkl model and against canonical marker genes for every final cell type, using check_markers on the full DE ranking.
 
-- **Classical monocytes** (clusters 0, 1): CD14 and LYZ/FCN1 were top-ranked, strongly significant, and expressed in nearly all cells of both clusters versus a small minority elsewhere — the canonical classical-monocyte profile, corroborated by the S100A8/A9/A12 program in the top markers. Both models agree at the broad ("Monocytes") level.
-- **Non-classical monocytes** (cluster 11): FCGR3A and MS4A7 were top-ranked and enriched in nearly the whole cluster, while CD14 showed no significant enrichment — the classic CD16+ monocyte profile, clearly distinct from clusters 0/1.
-- **CD16+ NK cells** (cluster 2): GNLY, NKG7 and FCGR3A were the top three ranked genes genome-wide for this cluster, each expressed in nearly all cluster cells and a small minority elsewhere; CD3D/CD3E were not enriched.
-- **Naive B cells** (cluster 3): CD79A and MS4A1 were the two top-ranked genes for the cluster, each expressed in nearly all cluster cells and almost none elsewhere.
-- **DC2** (cluster 6): FCER1A and CD1C were both highly ranked, strongly enriched, and essentially specific to this cluster, together with high HLA-DR gene expression.
-- **pDC** (cluster 12): IL3RA and CLEC4C were the top-ranked genes for the cluster and essentially unique to it (near-zero expression in every other cluster).
-- **Tcm/Naive helper T cells** (cluster 4) and **Tem/Effector helper T cells** (cluster 7): both clusters show strong, significant CD3D/CD3E and IL7R enrichment with CD8A/CD8B absent, confirming CD4 T-cell identity at two differentiation states. Cluster 4's top markers being dominated by ribosomal genes is consistent with the smaller transcriptome typical of resting/naive T cells, while cluster 7 carries an activation-associated profile (IL32, LTB).
-- **Tcm/Naive cytotoxic T cells** (cluster 5) and **Tem/Trm cytotoxic T cells** (cluster 9): both are CD3D/CD3E-positive with CD8A/CD8B significantly enriched; cluster 9 additionally shows strong CCL5 and GZMK enrichment, marking an effector/memory phenotype versus cluster 5's naive/central-memory profile.
-- **MAIT cells** (cluster 10): KLRB1 was the single top-ranked gene and expressed in essentially all cells of the cluster, together with strong GZMK and IL7R enrichment, matching the semi-invariant MAIT signature.
-- **Low-quality/stressed cells** (cluster 8, relabeled): CellTypist's label of "Tcm/Naive helper T cells" was not supported by markers — CD3D and CD3E showed no significant enrichment (expression indistinguishable from the rest of the dataset), nor did CD14, MS4A1 or NKG7. Instead, the cluster's actual top-ranked, significantly enriched markers were MALAT1 and a stack of mitochondrial transcripts (MT-CO1 and others), alongside immediate-early genes (JUN, FOSB, IER2) — a stress/dissociation-artifact signature rather than any lineage program, so it was relabeled and should be treated as background rather than a real cell type.
+- **Classical monocytes** (clusters 0 and 1): CD14 and LYZ strongly and specifically enriched, with S100A8/S100A9 additionally enriched in cluster 0, and no FCGR3A/MS4A7 enrichment ruling out non-classical identity.
+- **Non-classical monocytes**: FCGR3A and MS4A7 both strongly enriched, CD14 not distinctly enriched relative to other clusters, consistent with the CD14dim/CD16+ non-classical subset.
+- **CD16+ NK cells**: GNLY, NKG7 and GZMB all highly and near-uniformly enriched, FCGR3A co-enriched, with CD3D/CD3E largely absent, ruling out a T/NK doublet population.
+- **Naive B cells**: CD79A and MS4A1 both sharply enriched and essentially absent elsewhere.
+- **DC2**: FCER1A and CD1C sharply and specifically enriched, distinguishing this small cluster from monocytes and pDCs.
+- **pDC**: IL3RA, LILRA4 and GZMB all enriched to near-ubiquitous expression in this small cluster, a canonical pDC signature.
+- **Tcm/Naive helper T cells** (cluster 4): CD3D/CD3E/IL7R enriched together with high CCR7 and SELL, and CD8A/CD8B essentially absent — a CD4 naive/central-memory phenotype (CD4 mRNA itself is not a reliable discriminator, as it is also expressed by monocytes).
+- **Tcm/Naive cytotoxic T cells** (cluster 5): CD3D/CD3E enriched together with CD8A/CD8B and elevated CCR7/SELL — CD8 naive/central memory.
+- **Tem/Effector helper T cells** (cluster 7): CD3D/CD3E/IL7R strongly enriched with low CCR7/SELL, and CD8A/CD8B absent — an effector/memory CD4 phenotype.
+- **Tem/Trm cytotoxic T cells** (cluster 9): CCL5, GZMA/GZMK and CD8A/CD8B enriched together with CD3D/CD3E — a cytotoxic CD8 effector/memory phenotype.
+- **MAIT cells**: KLRB1, GZMK and the MAIT-specific SLC4A10 all enriched, together with CD3E and CCL5.
+- **Low-quality/stressed cells** (cluster 8, 24 cells (0.7%)): CellTypist called this cluster "Tcm/Naive helper T cells", but none of CD3D, CD3E, IL7R or CCR7 were significantly enriched, and SELL was actually depleted relative to the rest of the dataset. Its defining genes were instead MALAT1, JUN and a long run of mitochondrial transcripts (MT-CO1, MT-ATP6, MT-ND5, MT-CYB, MT-ND4, MT-CO3, MT-CO2, MT-ND1) plus MTRNR2L12 — a stress/damage signature with no lineage marker enriched. It was relabeled accordingly rather than reported as a T-cell subset.
+
+Final cell-type composition: 
 
 | Cell type | Cells | Share |
 |---|---|---|
@@ -98,15 +102,13 @@ CellTypist (Immune_All_Low.pkl, majority-voted per cluster) was used for initial
 | pDC | 23 | 0.6% |
 | **Total** | **3,563** | |
 
-Final annotated dataset: `3,563` cells across `12` labels, dominated by 1,043 cells (29.3%) classical monocytes and 712 cells (20.0%) naive/central-memory CD4 T cells, with smaller but clearly resolved populations of dendritic cells (64 cells (1.8%) DC2, 23 cells (0.6%) pDC) and the small stressed-cell cluster (24 cells (0.7%)).
-
 ![Marker genes per Leiden cluster](figures/marker_dotplot_clusters.png)
 
 *Top 5 marker genes per Leiden cluster (Wilcoxon rank-sum). Dot size: fraction of cells expressing; colour: mean expression scaled per gene.*
 
 ![Canonical marker genes per cell type](figures/marker_dotplot_canonical.png)
 
-*Canonical markers checked by the agent before accepting or changing labels (23 of 24 shown), ordered by the cell type each marks most, so the enriched dots run down the diagonal. A gene is shown if, in at least one type, padj < 0.05, log2FC > 1 and it is expressed in at least 25% of cells. Dot size: fraction of cells expressing; colour: mean expression scaled per gene. Not enriched in any type: MT-CO1.*
+*Canonical markers checked by the agent before accepting or changing labels (27 of 28 shown), ordered by the cell type each marks most, so the enriched dots run down the diagonal. A gene is shown if, in at least one type, padj < 0.05, log2FC > 1 and it is expressed in at least 25% of cells. Dot size: fraction of cells expressing; colour: mean expression scaled per gene. Not enriched in any type: MT-CO1.*
 
 ![Cell-type composition](figures/composition.png)
 
@@ -118,15 +120,14 @@ Final annotated dataset: `3,563` cells across `12` labels, dominated by 1,043 ce
 
 ## Caveats
 
-- The mitochondrial threshold (`15%`) was chosen specifically for this dataset's shifted mito distribution; it is more permissive than the usual tutorial default and should not be reused unexamined on other data.
-- Doublet removal used a global median+3MAD threshold per the standard rule; a small number of borderline cells near the cutoff are inherently ambiguous, and true heterotypic doublets between transcriptionally similar clusters (e.g. the two CD4 T-cell states) may be under-detected.
-- Cluster 8 ("Low-quality/stressed cells", 24 cells (0.7%)) shows no coherent marker program and should be excluded from any biological interpretation; it likely reflects a small population of stressed/damaged cells that passed the permissive mito filter.
-- scVI batch correction (on `batch`) was used to align cell types across the two 10x runs for clustering; this changes only the embedding used for neighbors/UMAP/clustering, not the raw counts, but any subtle run-specific biological differences could in principle be partially smoothed by the correction.
-- No condition comparison (composition or differential expression testing) was performed, since the two batches here are technical replicates (10x runs) of the same PBMC pool rather than distinct biological conditions.
+- Cluster 8 (24 cells (0.7%)) reflects damaged/stressed cells rather than a discrete biological population and should be excluded from downstream biological interpretation; it is retained in the annotated object for transparency.
+- The two clusters both labeled "Classical monocytes" (clusters 0 and 1) differ somewhat in markers (cluster 1 shows higher HLA-DR/CST3/CD68), which may reflect an activation or maturity gradient within classical monocytes rather than a distinct subset — worth revisiting with finer-resolution clustering if a monocyte-focused question arises.
+- No biological condition was present in this dataset (only the two technical 10x runs), so no composition or differential-expression comparison between conditions was performed; this analysis focused on quality control, batch-aware integration and cell-type annotation only.
+- The elevated mitochondrial fraction across this dataset (well above the tutorial-default cutoff of 5%) means a permissive filtering threshold was used; cells at the upper end of the retained range should be interpreted with some caution as possibly reflecting somewhat lower RNA quality rather than a wholly clean cell population.
 
 ## Conclusions
 
-Standard PBMC lineages were recovered cleanly after batch-aware integration of the two 10x runs: classical and non-classical monocytes, CD16+ NK cells, naive B cells, DC2 and pDC dendritic subsets, and CD4/CD8 T cells spanning naive/central-memory and effector/memory states plus MAIT cells. Every retained label is supported by canonical, statistically enriched markers verified directly against the ranked marker tables; the one CellTypist call not supported by markers (cluster 8) was identified as a stress artifact and relabeled accordingly.
+Starting from 4,000 raw cells across two PBMC 10x runs, QC and doublet filtering tuned to this dataset's actual distributions (rather than default tutorial cutoffs) retained 3,563 high-quality, singlet cells. Batch-aware integration with scVI resolved the two runs into a shared embedding, yielding 13 Leiden clusters that mapped onto 12 expected PBMC cell types (monocyte subsets, B cells, NK cells, CD4/CD8 T cell subsets including MAIT cells, DC2, and pDCs), each supported by canonical marker evidence, with one small artefactual cluster of stressed cells correctly separated out from genuine lineages.
 
 ## Methods
 
@@ -163,7 +164,7 @@ Standard PBMC lineages were recovered cleanly after batch-aware integration of t
 
 ### Reproducibility
 
-Random seed 0 for all stochastic steps. Every tool call, with the arguments the agent chose and the summary it read back, is in `tool_calls.jsonl`. The agent's choices are sampled from the model, so a re-run can take different decisions.
+Random seed 0 for all stochastic steps. Every tool call, with the arguments the agent chose and the summary it read back, is in `tool_calls.jsonl`. `replay.py` re-runs those calls without the model, reproducing this analysis; running the agent again samples new choices from the model, so it can take different decisions.
 
 ---
 

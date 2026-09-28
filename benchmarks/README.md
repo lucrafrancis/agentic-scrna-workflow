@@ -12,8 +12,9 @@ Repeated runs of the agent on one prompt, to measure two things:
 
 Each run is saved to `runs/<dataset>/<run_id>/`: the decision log (`tool_calls.jsonl`), the
 report, the prompt, token use and estimated cost (`usage.jsonl`), per-cell labels
-(`labels.csv`: cluster, final label, original CellTypist label), and `run_meta.json` (model,
-git commit, runtime).
+(`labels.csv`: cluster, final label, original CellTypist label), `run_meta.json` (model,
+git commit, runtime), the run's console output (`trace.log`), and `replay.py`, which re-runs
+the logged tool calls without the model.
 
 ## Scoring
 
@@ -39,9 +40,10 @@ not scored. A label missing from the mapping stops scoring rather than being gue
 matches the published one. **ARI** (adjusted Rand index) measures how closely the two
 groupings of the same cells agree, from 0 (chance) to 1 (identical).
 
-## Acceptance thresholds (PBMC3k)
+## Acceptance thresholds
 
-Set before the benchmark runs:
+Set before the benchmark runs. The same thresholds apply to PBMC3k and Kang, except cost:
+Kang is about 9× larger and adds composition and DE steps.
 
 | Metric | Acceptable |
 |---|---|
@@ -50,4 +52,4 @@ Set before the benchmark runs:
 | Embedding and annotation model | same in 5 of 5 runs |
 | Mitochondrial cutoff, doublet threshold, number of clusters | same in ≥ 4 of 5 runs |
 | Report attempts | ≤ 2 |
-| Cost | < $0.50 per run |
+| Cost | < $0.50 per run (PBMC3k), < $1 per run (Kang) |

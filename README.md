@@ -15,9 +15,12 @@ interferon-stimulated and control blood cells from 8 patients, per cell type.*
   reports. Each report shows every choice next to the standard default.
 - **It checks its own work.** It confirms cell-type labels against marker genes before
   accepting them, and every number in its report is filled in by code, not typed by the model.
-- **It is measured.** On PBMC3k, 5 repeated runs made identical decisions and matched the
-  published cell types for 94.9% of cells, at about $0.20 per run
-  ([benchmark](benchmarks/README.md)).
+- **It can be replayed.** Every run writes `replay.py`, which repeats the agent's logged tool
+  calls without the model and reproduces the analysis.
+- **It is measured.** Over 5 repeated runs on each of PBMC3k and Kang, the agent made identical
+  decisions every time. It matched the published cell types for 94.9% of cells on PBMC3k and
+  86.4% on Kang, where most differences are CD4 vs CD8 T cells. A run costs about $0.24
+  (PBMC3k) to $0.70 (Kang) ([benchmark](benchmarks/README.md)).
 
 ## Examples
 
@@ -27,7 +30,8 @@ interferon-stimulated and control blood cells from 8 patients, per cell type.*
 | [PBMC3k](examples/pbmc3k/report.md) | The standard workflow on a single sample |
 | [Two-batch PBMCs](examples/pbmc_multibatch/report.md) | Integrating two sequencing runs |
 
-Each folder also has the agent's decision log, the prompt it was given, and the run's cost.
+Each folder also has the agent's decision log, the prompt it was given, the run's cost, and
+its replay script.
 
 ## Running it
 

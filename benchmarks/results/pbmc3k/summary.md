@@ -16,5 +16,5 @@
 | accuracy | 94.9% | 94.9–94.9% |
 | ari | 0.903 | 0.903–0.903 |
 | pct_removed | 8.3% | 8.3–8.3% |
-| report_attempts | 1.8 | 1–2 |
-| cost_usd | $0.20 | $0.14–$0.23 (total $0.99) |
+| report_attempts | 2 | 2–2 |
+| cost_usd | $0.24 | $0.22–$0.26 (total $1.20) |

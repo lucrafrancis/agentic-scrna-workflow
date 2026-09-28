@@ -97,6 +97,14 @@ def test_report_gets_a_title_when_the_narrative_has_none(logged_run):
     assert text.index("## Overview") < text.index("## Key analysis decisions")
 
 
+def test_decisions_table_shows_skipped_doublets(logged_run):
+    log = report.read_log(SESSION.paths.tool_log)
+    no_filter = [e for e in log if e["tool"] != "filter_doublets"]
+    assert "**skipped** (no filter)" in report.decisions_table(no_filter)
+    no_doublets = [e for e in no_filter if e["tool"] != "detect_doublets"]
+    assert "**skipped** (not run)" in report.decisions_table(no_doublets)
+
+
 def test_doublet_rule_names_per_run_scrublet_thresholds():
     candidates = {"median_3mad": 0.102, "scrublet_auto_per_batch": {"ctrl": 0.276, "stim": 0.648}}
     assert report._nearest_rule(0.276, candidates) == "Scrublet auto, ctrl run"
