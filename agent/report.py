@@ -372,8 +372,9 @@ def _condition_column() -> str | None:
     return None
 
 
-def _umap_panel(adata, column: str, title: str, path: Path, size: float = 5.0) -> None:
-    """One UMAP coloured by `column`, for posters and slides: a square plot, legend on the right.
+def _umap_panel(adata, column: str, path: Path, size: float = 5.0) -> None:
+    """One UMAP coloured by `column` and titled with it, for posters and slides: a square plot,
+    legend on the right.
 
     Not placed in the report (umap.png shows every colouring there). Cells are drawn in a
     fixed random order so no group is hidden under another, e.g. stim drawn over ctrl.
@@ -395,7 +396,7 @@ def _umap_panel(adata, column: str, title: str, path: Path, size: float = 5.0) -
         ax.scatter(xy[:, 0], xy[:, 1], c=[colors[k] for k in codes], s=min(12.0, 30000 / adata.n_obs),
                    linewidths=0, rasterized=True)
         ax.set_axis_off()
-        ax.set_title(title, fontsize=13, color=INK)
+        ax.set_title(column, fontsize=13, color=INK)
         handles = [plt.Line2D([], [], marker="o", linestyle="", markersize=7, color=col) for col in colors]
         ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=2 if len(names) > 14 else 1,
                   fontsize=9, handletextpad=0.3, columnspacing=1.2, labelspacing=0.4)
@@ -427,7 +428,7 @@ def _umap_figure(adata, batch_key: str | None, figdir: Path) -> Figure | None:
                    frameon=False, legend_fontsize=8, ncols=2 if len(colors) > 3 else 4)
         _save(plt.gcf(), figdir / "umap.png")
         for c in colors:
-            _umap_panel(adata, c, titles[c], figdir / f"umap_{c}.png")
+            _umap_panel(adata, c, figdir / f"umap_{c}.png")
     rep = {"X_scVI": "the scVI latent space", "X_pca": "PCA"}.get(SESSION.representation, SESSION.representation)
     names = [titles[c] if c == "leiden" else titles[c].lower() for c in colors]
     by = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
