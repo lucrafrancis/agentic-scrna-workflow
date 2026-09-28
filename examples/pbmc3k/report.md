@@ -4,7 +4,7 @@
 
 ## Overview
 
-This report covers the standard scRNA-seq processing and annotation of a PBMC sample from a single healthy donor, sequenced in a single 10x Genomics run (no batch key, no condition to compare). Starting from 2,700 cells and 32,738 genes, the workflow proceeded through QC filtering, doublet removal, normalization, PCA, Leiden clustering, and CellTypist-based annotation, ending with 2,421 high-quality cells assigned to 8 cell types.
+This analysis processed a 10x Genomics PBMC dataset from a single healthy donor (2,700 cells, 32,738 genes at input) through QC filtering, doublet removal, normalization, PCA-based dimensionality reduction, Leiden clustering, and CellTypist-assisted cell-type annotation. As this is a single clean 10x run from one donor with no batch structure, no batch correction was required and standard PCA was used for the embedding.
 
 ## Key analysis decisions
 
@@ -22,9 +22,9 @@ Each row compares a standard default with what the agent chose after reading the
 
 ## Quality control
 
-Gene identifiers were confirmed as human gene symbols, with 13 mitochondrial genes detected using the `MT-` prefix. Per-cell QC metrics were unremarkable for a healthy PBMC sample: median genes/cell 817, median UMI counts/cell 2,197, and median mitochondrial fraction 2.03% (p95 4.01%, max 22.6%).
+Gene identifiers were confirmed as human gene symbols with a standard `MT-` mitochondrial prefix (13 mitochondrial genes detected). Per-cell QC distributions showed a healthy library: median genes/cell of 817 (range 212–3,422), median total counts of 2,197, and median mitochondrial fraction of 2.03% (p99 = 5.88%, max = 22.6%).
 
-The recommended tutorial-default thresholds (min genes/cell 200, max mitochondrial % 5%, min cells/gene 3) fit this dataset well: the gene-count floor removed no additional cells (all cells already exceeded it), while the mitochondrial cap removed 57 cells (2.1%) that were consistent with stressed or dying cells at the upper tail of the mito-percent distribution. Filtering left 2,643 cells and 13,697 genes (genes detected in fewer than 3 cells were dropped as uninformative).
+The tutorial-standard thresholds (min_genes=200, max_pct_mt=5%, min_cells=3) fit this data well: the min_genes floor removed no cells (the dataset was already reasonably clean), while the mitochondrial cap removed 57 cells (2.1%) that sat in the long high-mito tail beyond the p95–p99 range — consistent with stressed or dying cells rather than a genuine cell population. Gene filtering (present in at least 3 cells) dropped 19,041 largely undetected genes, leaving 13,697 informative genes and 2,643 cells.
 
 ![QC distributions with cutoffs](figures/qc_thresholds.png)
 
@@ -32,7 +32,7 @@ The recommended tutorial-default thresholds (min genes/cell 200, max mitochondri
 
 ## Doublet detection
 
-Scrublet was run on the full (single-run) dataset. The doublet-score distribution was not bimodal, so per the standard rule I used median + 3×MAD (0.1) rather than a bimodal valley or a fixed cutoff. This is a plain 10x run with no upstream doublet removal (e.g., no genotype demultiplexing or hashing mentioned), so the stricter statistical threshold is appropriate rather than a more permissive one. This flagged and removed 222 cells (8.4% of the QC-passed population), in line with the expected doublet rate for a standard 10x run at this cell loading. After this step 2,421 cells remained.
+Scrublet was run on the whole dataset as a single 10x run (no batch splitting needed). The doublet-score distribution was unimodal/right-skewed (not bimodal), so per the standard rule I used median + 3×MAD (0.1) rather than a bimodal valley (none was present) and rather than the lighter Scrublet-automatic threshold (0.227), which is reserved for datasets where doublets were already removed upstream (e.g. by demultiplexing) — not the case here since this is raw, unprocessed 10x output from one donor. At threshold 0.1, 222 cells (8.4%) were flagged and removed, in line with expected 10x doublet rates for this cell loading.
 
 ![Doublet score distribution](figures/doublet_scores.png)
 
@@ -40,11 +40,11 @@ Scrublet was run on the full (single-run) dataset. The doublet-score distributio
 
 ## Dimensionality reduction
 
-Because this dataset comes from a single donor and a single sequencing run with no batch structure, PCA on the normalized, log-transformed, highly-variable-gene matrix (2,000 HVGs) is the appropriate and simplest choice — batch-correction methods like scVI are unnecessary here and would add complexity without benefit. The top PC captured 10.3% of variance, with a steady drop-off across subsequent components, consistent with several biologically distinct discrete cell populations plus continuous variation within them.
+With a single donor and no batch key, PCA on the 2,000 highly variable genes (after total-count normalization to 10,000 and log1p) is the simpler and correct choice over scVI's batch-correcting latent space — there is no batch effect to correct here. The leading PCs captured a substantial share of variance (10.3%, 3.5%, 2.5% for PC1–PC3 respectively), and 50 PCs were retained for downstream neighbor-graph construction.
 
 ## Clustering
 
-Leiden clustering at resolution 1.0 on the PCA embedding produced 9 clusters, ranging from 7 to 550 cells. The UMAP below shows well-separated clusters consistent with the major PBMC lineages.
+Leiden clustering at resolution 1.0 produced 9 clusters ranging from 7 to 550 cells, reflecting the expected diversity of major PBMC lineages plus a small platelet population.
 
 | Cluster | Cells | Top marker genes | Cell type |
 |---|---|---|---|
@@ -64,18 +64,17 @@ Leiden clustering at resolution 1.0 on the PCA embedding produced 9 clusters, ra
 
 ## Cell-type annotation
 
-CellTypist (Immune_All_Low.pkl, fine-grained model) assigned each cluster a label by majority vote, cross-checked against the coarse Immune_All_High.pkl model as a second opinion; the two agreed at the expected level of granularity in every cluster. I additionally verified canonical markers for every final cell type with `check_markers`:
+CellTypist (Immune_All_Low.pkl, fine-grained model) assigned each cluster a majority label via majority voting, cross-checked against the coarser Immune_All_High.pkl model as a second opinion; both models agreed on cell identity at their respective resolutions, with no contradictions requiring relabeling.
 
-- **Tem/Trm cytotoxic T cells** (cluster 0): CD8A and CD8B were strongly and specifically enriched together with high CD3D/CD3E and cytotoxic genes (NKG7, GZMA), confirming a CD8+ effector/memory T-cell identity.
-- **B cells** (cluster 1): CD79A and MS4A1 were both essentially specific to this cluster and strongly depleted elsewhere, with CD3D depleted here, confirming B-cell identity.
-- **Tcm/Naive helper T cells** (clusters 2 and 3): both clusters show high CD3D/CD3E and IL7R with low CD8A/CD8B, consistent with CD4+ T helper cells; cluster 3 shows markedly higher CCR7 than cluster 2, suggesting it skews more naive while cluster 2 skews more memory-like, but both fall under the same fine CellTypist label and were kept as one annotation given the shared core T-helper markers.
-- **Classical monocytes** (cluster 4): LYZ and CD14 were both strongly and specifically enriched, the canonical classical-monocyte signature.
-- **DC** (cluster 5): FCER1A and CD1C were both specifically enriched here and essentially absent elsewhere, confirming conventional dendritic cells rather than monocytes despite shared HLA-DR/CD74 expression with the monocyte/B-cell clusters.
-- **CD16+ NK cells** (cluster 6): GNLY, NKG7, KLRD1 and FCGR3A were all strongly and specifically enriched, and CD3D was near-absent, confirming NK identity over the alternative "ILC" label suggested by the coarse model — ILCs would not be expected to co-express this cytotoxic/FCGR3A program.
-- **Non-classical monocytes** (cluster 7): FCGR3A and MS4A7 were both strongly and specifically enriched together with high LYZ, the canonical non-classical (CD16+) monocyte signature, distinguishing it from cluster 4's classical monocytes (which are CD14-high, FCGR3A/MS4A7-low).
-- **Megakaryocytes/platelets** (cluster 8): PPBP and PF4 were both essentially universally expressed in this small cluster and essentially absent elsewhere, the canonical platelet/megakaryocyte marker pair.
-
-No relabeling was necessary: in every case the CellTypist label matched the marker evidence and the two reference models agreed at their respective resolutions.
+Canonical marker genes, checked with check_markers against the full per-cluster differential expression ranking, confirmed every assigned label:
+- **Tem/Trm cytotoxic T cells** (cluster 0): high CD3D co-expressed with CD8A, CD8B, GZMK and CCL5 (all strongly enriched with high rank and low padj, and largely absent from other clusters), consistent with cytotoxic/effector CD8 T cells.
+- **B cells** (cluster 1): near-exclusive CD79A and MS4A1 expression (both top-ranked, highly significant, and depleted elsewhere), with the T-cell marker CD3D strongly depleted in this cluster.
+- **Tcm/Naive helper T cells** (clusters 2 and 3): CD3D and IL7R both significantly enriched, while CD8A/CD8B are not enriched, consistent with CD4 T cells; cluster 3 is dominated by ribosomal-protein transcripts typical of a quiescent naive subset, which CellTypist grouped with cluster 2 under the same fine label.
+- **Classical monocytes** (cluster 4): strong, near-universal enrichment of CD14, LYZ and S100A8, essentially absent in other clusters.
+- **DC** (cluster 5): high FCER1A and CD1C enrichment, without the CD14 enrichment seen in classical monocytes, consistent with conventional dendritic cells.
+- **CD16+ NK cells** (cluster 6): GNLY, NKG7 and FCGR3A all strongly and significantly enriched, with CD3D essentially absent, ruling out a T/NKT identity.
+- **Non-classical monocytes** (cluster 7): FCGR3A and MS4A7 strongly enriched without the CD14/S100A8 signature that marks classical monocytes.
+- **Megakaryocytes/platelets** (cluster 8): near-universal PF4 and PPBP expression (top-ranked in the cluster, absent elsewhere), a small (n=7 cells (0.3%)) but clearly distinct population.
 
 Final cell-type composition:
 
@@ -91,7 +90,7 @@ Final cell-type composition:
 | Megakaryocytes/platelets | 7 | 0.3% |
 | **Total** | **2,421** | |
 
-Major populations: 1,325 cells (54.7%) T cells, 446 cells (18.4%) classical monocytes, 315 cells (13.0%) B cells, 140 cells (5.8%) NK cells, 147 cells (6.1%) non-classical monocytes, 41 cells (1.7%) dendritic cells, and 7 cells (0.3%) megakaryocytes/platelets — a composition typical of healthy human PBMCs.
+The most abundant populations were 1,065 cells (44.0%) CD4 T cells, 446 cells (18.4%) classical monocytes, and 315 cells (13.0%) B cells, alongside smaller 260 cells (10.7%) cytotoxic T cell, 147 cells (6.1%) non-classical monocyte, 140 cells (5.8%) NK cell, 41 cells (1.7%) dendritic cell, and 7 cells (0.3%) platelet populations — a composition consistent with expectations for healthy human PBMCs.
 
 ![Marker genes per Leiden cluster](figures/marker_dotplot_clusters.png)
 
@@ -111,13 +110,14 @@ Major populations: 1,325 cells (54.7%) T cells, 446 cells (18.4%) classical mono
 
 ## Caveats
 
-- Clusters 2 and 3 were both annotated as "Tcm/Naive helper T cells" by CellTypist; the CCR7 gradient between them suggests a naive/memory continuum rather than two discrete cell types, and a higher clustering resolution could resolve this further if finer CD4 subsetting were of interest.
-- The dendritic cell cluster (41 cells (1.7%)) and especially the megakaryocyte/platelet cluster (7 cells (0.3%)) are small, so marker statistics for these populations are based on limited cell numbers and should be interpreted with appropriate caution.
-- This is a single donor with no replicate structure or experimental condition, so no composition or differential-expression comparison was performed; all findings describe this one sample.
+- This is a single donor/single run dataset with no biological replicates or condition to compare, so no composition or differential-expression testing across conditions was performed.
+- Clusters 2 and 3 both received the same fine-grained "Tcm/Naive helper T cells" label; cluster 3's ribosomal-high signature suggests it may represent a naive/quiescent subset rather than a truly distinct cell type, and finer sub-clustering could resolve this if desired.
+- Doublet removal used a MAD-based statistical threshold rather than a clear bimodal valley, since the score distribution was unimodal; some borderline low-scoring doublets or high-scoring genuine (e.g. large, transcript-rich) cells may be imperfectly classified.
+- The mitochondrial % cutoff (5%) is a widely used PBMC heuristic but is somewhat arbitrary; a small number of legitimate high-mito cells (e.g. metabolically active cells) may have been excluded.
 
 ## Conclusions
 
-QC, doublet removal, and clustering proceeded smoothly for this clean single-run PBMC dataset, yielding 2,421 cells across 9 clusters that map onto 8 well-supported, canonical PBMC cell types — T-cell subsets, B cells, classical and non-classical monocytes, dendritic cells, NK cells, and megakaryocytes/platelets — each confirmed by specific, enriched canonical markers rather than by CellTypist label alone.
+After QC filtering and doublet removal (10.3% of original cells removed in total across mitochondrial and doublet filters), normalization, and PCA-based clustering, 2,421 high-quality cells resolved into 9 clusters mapping to 8 annotated cell types, all confirmed by canonical marker expression. The recovered populations — CD4 and CD8 T cells, B cells, classical and non-classical monocytes, NK cells, dendritic cells, and platelets — represent the expected major lineages of peripheral blood, indicating a technically sound and biologically sensible annotation of this dataset.
 
 ## Methods
 
@@ -151,7 +151,7 @@ QC, doublet removal, and clustering proceeded smoothly for this clean single-run
 
 ### Reproducibility
 
-Random seed 0 for all stochastic steps. Every tool call, with the arguments the agent chose and the summary it read back, is in `tool_calls.jsonl`. The agent's choices are sampled from the model, so a re-run can take different decisions.
+Random seed 0 for all stochastic steps. Every tool call, with the arguments the agent chose and the summary it read back, is in `tool_calls.jsonl`. `replay.py` re-runs those calls without the model, reproducing this analysis; running the agent again samples new choices from the model, so it can take different decisions.
 
 ---
 

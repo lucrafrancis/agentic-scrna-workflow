@@ -12,8 +12,9 @@ Repeated runs of the agent on one prompt, to measure two things:
 
 Each run is saved to `runs/<dataset>/<run_id>/`: the decision log (`tool_calls.jsonl`), the
 report, the prompt, token use and estimated cost (`usage.jsonl`), per-cell labels
-(`labels.csv`: cluster, final label, original CellTypist label), and `run_meta.json` (model,
-git commit, runtime).
+(`labels.csv`: cluster, final label, original CellTypist label), `run_meta.json` (model,
+git commit, runtime), the run's console output (`trace.log`), and `replay.py`, which re-runs
+the logged tool calls without the model.
 
 ## Scoring
 
